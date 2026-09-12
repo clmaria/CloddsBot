@@ -19,9 +19,10 @@ test('order book economics computes spread and zero slippage inside top level', 
   assertClose(result.sellSlippageBps, 0);
   assert.equal(result.buyFullyFillable, true);
   assert.equal(result.sellFullyFillable, true);
+  assertClose(result.sellFilledQuote, 25);
 });
 
-test('order book economics captures multi-level VWAP slippage', () => {
+test('sell-side slippage holds base quantity fixed rather than selling more base to preserve quote proceeds', () => {
   const result = evaluateOrderBookEconomics({
     bids: [
       { price: 100, baseQty: 0.1 },
@@ -33,12 +34,15 @@ test('order book economics captures multi-level VWAP slippage', () => {
     ],
   }, 20);
 
-  assert.ok(result.buyVwap > 101);
-  assert.ok(result.sellVwap < 100);
-  assert.ok(result.buySlippageBps > 0);
+  // EUR 20 at best bid 100 represents a fixed 0.2 base-unit sell target.
+  // The book fills 0.1 @ 100 and 0.1 @ 99 => VWAP 99.5 and EUR 19.9 proceeds.
+  assertClose(result.sellVwap, 99.5);
+  assertClose(result.sellFilledQuote, 19.9);
   assert.ok(result.sellSlippageBps > 0);
-  assert.equal(result.buyFullyFillable, true);
   assert.equal(result.sellFullyFillable, true);
+  assert.ok(result.buyVwap > 101);
+  assert.ok(result.buySlippageBps > 0);
+  assert.equal(result.buyFullyFillable, true);
 });
 
 test('order book economics flags insufficient depth instead of pretending full fill', () => {
