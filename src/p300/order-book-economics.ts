@@ -29,11 +29,17 @@ function validateBook(book: OrderBookSnapshot): void {
     if (!(level.price > 0) || !(level.baseQty > 0) || !Number.isFinite(level.price) || !Number.isFinite(level.baseQty)) {
       throw new Error('invalid order book level');
     }
+    const quoteCapacity = level.price * level.baseQty;
+    if (!Number.isFinite(quoteCapacity) || quoteCapacity <= 0) {
+      throw new Error('invalid order book quote capacity');
+    }
   }
 }
 
 function quoteVwap(levels: BookLevel[], quoteTarget: number): { vwap: number; filledQuote: number; fullyFillable: boolean } {
-  if (!(quoteTarget > 0)) throw new Error('quote target must be > 0');
+  if (!Number.isFinite(quoteTarget) || quoteTarget <= 0) {
+    throw new Error('quote target must be finite and > 0');
+  }
   let remaining = quoteTarget;
   let spentQuote = 0;
   let acquiredBase = 0;
@@ -48,8 +54,13 @@ function quoteVwap(levels: BookLevel[], quoteTarget: number): { vwap: number; fi
     remaining -= takeQuote;
   }
 
+  const vwap = acquiredBase > 0 ? spentQuote / acquiredBase : 0;
+  if (!Number.isFinite(vwap) || !Number.isFinite(spentQuote) || !Number.isFinite(remaining)) {
+    throw new Error('derived order-book economics are not finite');
+  }
+
   return {
-    vwap: acquiredBase > 0 ? spentQuote / acquiredBase : 0,
+    vwap,
     filledQuote: spentQuote,
     fullyFillable: remaining <= 1e-9,
   };
@@ -64,7 +75,9 @@ export function evaluateOrderBookEconomics(
   quoteTicket: number
 ): OrderBookEconomics {
   validateBook(book);
-  if (!(quoteTicket > 0)) throw new Error('quote ticket must be > 0');
+  if (!Number.isFinite(quoteTicket) || quoteTicket <= 0) {
+    throw new Error('quote ticket must be finite and > 0');
+  }
 
   const bids = [...book.bids].sort((a, b) => b.price - a.price);
   const asks = [...book.asks].sort((a, b) => a.price - b.price);
@@ -74,11 +87,21 @@ export function evaluateOrderBookEconomics(
 
   const mid = (bestBid + bestAsk) / 2;
   const spreadBps = ((bestAsk - bestBid) / mid) * 10_000;
+  if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(spreadBps) || spreadBps < 0) {
+    throw new Error('invalid derived spread');
+  }
 
   const buy = quoteVwap(asks, quoteTicket);
   const sell = quoteVwap(bids, quoteTicket);
   const buySlippageBps = buy.vwap > 0 ? ((buy.vwap - bestAsk) / bestAsk) * 10_000 : Infinity;
   const sellSlippageBps = sell.vwap > 0 ? ((bestBid - sell.vwap) / bestBid) * 10_000 : Infinity;
+
+  if (!Number.isFinite(buySlippageBps) || !Number.isFinite(sellSlippageBps)) {
+    throw new Error('derived slippage is not finite');
+  }
+  if (buySlippageBps < -1e-9 || sellSlippageBps < -1e-9) {
+    throw new Error('derived slippage cannot be negative');
+  }
 
   return {
     bestBid,
@@ -87,8 +110,8 @@ export function evaluateOrderBookEconomics(
     spreadBps,
     buyVwap: buy.vwap,
     sellVwap: sell.vwap,
-    buySlippageBps,
-    sellSlippageBps,
+    buySlippageBps: Math.max(0, buySlippageBps),
+    sellSlippageBps: Math.max(0, sellSlippageBps),
     buyFilledQuote: buy.filledQuote,
     sellFilledQuote: sell.filledQuote,
     buyFullyFillable: buy.fullyFillable,
