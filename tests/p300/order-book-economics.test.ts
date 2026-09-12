@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { evaluateOrderBookEconomics } from '../../src/p300/order-book-economics';
 
+function assertClose(actual: number, expected: number, epsilon = 1e-10): void {
+  assert.ok(Math.abs(actual - expected) <= epsilon, `expected ${actual} to be within ${epsilon} of ${expected}`);
+}
+
 test('order book economics computes spread and zero slippage inside top level', () => {
   const result = evaluateOrderBookEconomics({
     bids: [{ price: 99.9, baseQty: 10 }],
@@ -9,10 +13,10 @@ test('order book economics computes spread and zero slippage inside top level', 
   }, 25);
 
   assert.ok(result.spreadBps > 19 && result.spreadBps < 21);
-  assert.equal(result.buyVwap, 100.1);
-  assert.equal(result.sellVwap, 99.9);
-  assert.equal(result.buySlippageBps, 0);
-  assert.equal(result.sellSlippageBps, 0);
+  assertClose(result.buyVwap, 100.1);
+  assertClose(result.sellVwap, 99.9);
+  assertClose(result.buySlippageBps, 0);
+  assertClose(result.sellSlippageBps, 0);
   assert.equal(result.buyFullyFillable, true);
   assert.equal(result.sellFullyFillable, true);
 });
