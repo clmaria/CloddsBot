@@ -8,6 +8,7 @@ import {
 
 const MARKET = 'BTC-USDC';
 const ACTIVATED_NS = '1752139200000000000';
+const ACTIVE_UNTIL_NS = '1752139200000001000';
 
 function request(overrides: Partial<ConservativeMakerFillRequest> = {}): ConservativeMakerFillRequest {
   return {
@@ -16,6 +17,7 @@ function request(overrides: Partial<ConservativeMakerFillRequest> = {}): Conserv
     limitPrice: 100,
     baseQty: 0.5,
     activatedAtNs: ACTIVATED_NS,
+    activeUntilNs: ACTIVE_UNTIL_NS,
     activationBook: {
       bids: [{ price: 100, baseQty: 1 }, { price: 99, baseQty: 2 }],
       asks: [{ price: 101, baseQty: 1 }, { price: 102, baseQty: 2 }],
@@ -90,8 +92,6 @@ test('maker sell model is symmetric and uses taker buys to consume ask queue', (
     ],
   }));
 
-  // 1 base was displayed ahead at 101. First trade consumes it and 0.1 of ours;
-  // second trade consumes the remaining 0.3.
   assert.equal(result.status, 'filled');
   assert.equal(result.evidence, 'trade-at-price');
   assert.ok(Math.abs(result.filledBase - 0.4) < 1e-12);
@@ -106,21 +106,36 @@ test('post-only crossings are rejected rather than counted as maker fills', () =
   assert.equal(sell.status, 'rejected-post-only');
 });
 
-test('trades before activation are ignored and input order does not create lookahead', () => {
+test('trades before activation and after cancellation are ignored', () => {
   const result = simulateConservativeMakerFill(request({
+    activeUntilNs: '1752139200000000250',
     activationBook: {
       bids: [{ price: 100, baseQty: 0.1 }],
       asks: [{ price: 101, baseQty: 1 }],
     },
     trades: [
-      trade('after', 'sell', 100, 0.5, '1752139200000000200'),
+      trade('too-late', 'sell', 99, 100, '1752139200000000300'),
+      trade('inside-window', 'sell', 100, 0.5, '1752139200000000200'),
       trade('before', 'sell', 100, 100, '1752139199999999999'),
     ],
   }));
 
   assert.equal(result.status, 'partially-filled');
+  assert.equal(result.evidence, 'trade-at-price');
   assert.ok(Math.abs(result.filledBase - 0.4) < 1e-12);
   assert.equal(result.firstFillTimestampNs, '1752139200000000200');
+  assert.equal(result.fullFillTimestampNs, undefined);
+});
+
+test('active window must be precision-safe and strictly positive in duration', () => {
+  assert.throws(
+    () => simulateConservativeMakerFill(request({ activeUntilNs: ACTIVATED_NS })),
+    /must be after/,
+  );
+  assert.throws(
+    () => simulateConservativeMakerFill(request({ activeUntilNs: 1_752_139_200_000_001_000 as unknown as string })),
+    /precision-safe/,
+  );
 });
 
 test('fill inference fails closed without stream integrity or regular trading', () => {
