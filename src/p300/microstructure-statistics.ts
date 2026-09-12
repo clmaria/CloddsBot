@@ -15,8 +15,10 @@ export interface DistributionSummary {
 export interface MicrostructureSummary {
   sampleCount: number;
   spreadBps: DistributionSummary;
-  buySlippageBps: DistributionSummary;
-  sellSlippageBps: DistributionSummary;
+  buySlippageBps: DistributionSummary | null;
+  sellSlippageBps: DistributionSummary | null;
+  buyFillableSampleCount: number;
+  sellFillableSampleCount: number;
   buyInsufficientDepthRate: number;
   sellInsufficientDepthRate: number;
   firstObservedAtMs: number;
@@ -49,9 +51,15 @@ function summarize(values: number[]): DistributionSummary {
   };
 }
 
+function summarizeOptional(values: number[]): DistributionSummary | null {
+  return values.length ? summarize(values) : null;
+}
+
 /**
- * Aggregates read-only order-book economics observations. This deliberately
- * describes distributions rather than turning one snapshot into a venue PASS.
+ * Aggregates read-only order-book economics observations. Slippage
+ * distributions include only snapshots where the requested ticket was fully
+ * fillable; partial-fill slippage would otherwise make shallow books look
+ * artificially cheap. Depth failure is reported separately.
  */
 export function summarizeMicrostructure(
   observations: MicrostructureObservation[]
@@ -63,15 +71,29 @@ export function summarizeMicrostructure(
     throw new Error('observation timestamps must be positive finite values');
   }
 
+  for (const observation of observations) {
+    const metrics = [
+      observation.economics.spreadBps,
+      observation.economics.buySlippageBps,
+      observation.economics.sellSlippageBps,
+    ];
+    if (metrics.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error('microstructure observations contain invalid economics');
+    }
+  }
+
+  const buyFillable = observations.filter((item) => item.economics.buyFullyFillable);
+  const sellFillable = observations.filter((item) => item.economics.sellFullyFillable);
+
   return {
     sampleCount: observations.length,
     spreadBps: summarize(observations.map((item) => item.economics.spreadBps)),
-    buySlippageBps: summarize(observations.map((item) => item.economics.buySlippageBps)),
-    sellSlippageBps: summarize(observations.map((item) => item.economics.sellSlippageBps)),
-    buyInsufficientDepthRate:
-      observations.filter((item) => !item.economics.buyFullyFillable).length / observations.length,
-    sellInsufficientDepthRate:
-      observations.filter((item) => !item.economics.sellFullyFillable).length / observations.length,
+    buySlippageBps: summarizeOptional(buyFillable.map((item) => item.economics.buySlippageBps)),
+    sellSlippageBps: summarizeOptional(sellFillable.map((item) => item.economics.sellSlippageBps)),
+    buyFillableSampleCount: buyFillable.length,
+    sellFillableSampleCount: sellFillable.length,
+    buyInsufficientDepthRate: (observations.length - buyFillable.length) / observations.length,
+    sellInsufficientDepthRate: (observations.length - sellFillable.length) / observations.length,
     firstObservedAtMs: Math.min(...timestamps),
     lastObservedAtMs: Math.max(...timestamps),
   };
