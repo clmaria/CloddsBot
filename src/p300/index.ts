@@ -8,3 +8,4 @@ export * from './supervisor';
 export * from './profit-reserve';
 export * from './authorization-hash';
 export * from './anchored-reversion-evidence';
+export * from './bitvavo-book-sync';
