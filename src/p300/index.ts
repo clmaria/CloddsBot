@@ -7,3 +7,4 @@ export * from './fast-gate';
 export * from './supervisor';
 export * from './profit-reserve';
 export * from './authorization-hash';
+export * from './anchored-reversion-evidence';
