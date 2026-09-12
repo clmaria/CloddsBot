@@ -35,9 +35,19 @@ export interface StrategyAuthorizationProfile {
 }
 
 export function evaluateAttentionGate(attention: AttentionBudget): SystemGateDecision {
-  if (attention.maxHumanHours <= 0 || attention.maxActiveDays <= 0) {
-    throw new Error('attention budget limits must be > 0');
+  if (!Number.isFinite(attention.maxHumanHours) || attention.maxHumanHours <= 0) {
+    throw new Error('maximum human hours must be finite and > 0');
   }
+  if (!Number.isFinite(attention.consumedHumanHours) || attention.consumedHumanHours < 0) {
+    throw new Error('consumed human hours must be finite and >= 0');
+  }
+  if (!Number.isInteger(attention.maxActiveDays) || attention.maxActiveDays <= 0) {
+    throw new Error('maximum active days must be a positive integer');
+  }
+  if (!Number.isInteger(attention.activeDays) || attention.activeDays < 0) {
+    throw new Error('active days must be a non-negative integer');
+  }
+
   return attention.consumedHumanHours >= attention.maxHumanHours ||
     attention.activeDays >= attention.maxActiveDays
     ? 'REVIEW_REQUIRED'
@@ -46,7 +56,8 @@ export function evaluateAttentionGate(attention: AttentionBudget): SystemGateDec
 
 /**
  * Slow-path preflight. Run when enabling or materially changing a strategy/venue,
- * never inside the order hot path.
+ * never inside the order hot path. Invalid material inputs throw and therefore
+ * cannot produce an authorization profile.
  */
 export function runStrategyPreflight(input: StrategyPreflightInput): StrategyAuthorizationProfile {
   const reasons: string[] = [];
