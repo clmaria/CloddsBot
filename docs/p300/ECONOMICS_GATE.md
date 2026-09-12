@@ -4,72 +4,92 @@ Status: research/preflight only. This document does not authorize LIVE trading.
 
 ## Purpose
 
-The Economics Gate must answer whether a venue/pair/strategy combination has enough economic room to justify further work at P300 scale. It is a falsification gate, not a strategy generator.
+The Economics Gate asks whether a venue/pair/strategy combination has enough economic room to justify further P300 work. It is a falsification gate, not a strategy generator and not an instruction to search for ever-larger claimed signals.
 
 ## Required sequence
 
-1. Refresh venue constraints from authoritative APIs.
-2. Identify the binding constraint (base quantity, quote notional, or both).
-3. Compute current and stressed exit granularity.
-4. Build a coherent risk envelope; do not increase risk merely to obtain reducibility.
-5. Compute all-in execution cost and Minimum Viable Edge (MVE).
-6. Attach the MVE to an explicit holding horizon and expected trade frequency.
-7. Compare net strategy return to a same-horizon benchmark.
-8. Require an Edge Thesis naming the counterparty, persistence mechanism, decay hypothesis and falsification condition.
-9. Return GO / NO-GO for research. A high MVE is not an instruction to search harder for a signal that claims a high edge.
+1. Pass the venue's mandatory regulatory gate.
+2. Refresh venue/pair/order-type constraints from authoritative exchange metadata.
+3. Identify the binding constraint: base quantity, quote notional, both, or none.
+4. Compute current and stressed exit granularity from actually executable quantities.
+5. Build a coherent Risk Envelope without increasing acceptable risk merely to obtain exchange granularity.
+6. Measure or conservatively model fees, spread, slippage, adverse selection, non-fill effects, infrastructure and admin burden.
+7. Compute the cost floor and effective economic hurdle for a declared holding horizon and expected frequency.
+8. Compare the strategy with the benchmark over exactly the same horizon.
+9. Require a predeclared Edge Thesis with counterparty, persistence mechanism, decay and falsification condition.
+10. Return research GO / NO-GO. Adapter construction comes only after the pre-adapter gates pass.
 
 ## Dynamic market constraints
 
-Constraints are venue-, pair-, and order-type-specific. They must never be hardcoded as a single global `minOrder`.
+Constraints are venue-, pair-, and order-type-specific. They must never be represented by a single global `minOrder`.
 
-### Binance
+The preflight must fail closed when material filters are unknown, stale or incompatible. Human-readable support tables are supporting evidence only; fresh exchange metadata is authoritative for runtime constraints.
 
-The exchange exposes symbol filters including `LOT_SIZE`, `MIN_NOTIONAL`, `NOTIONAL` and `MARKET_LOT_SIZE`. The adapter must distinguish limit/maker constraints from market-order constraints and fail closed on unknown filter combinations.
-
-Reference: https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/ws-api/account
-
-### Kraken
-
-The public `AssetPairs` endpoint provides trading metadata such as `ordermin`, price precision and volume precision. Funding minimums are a separate concept and must not be used as spot order minimums.
-
-References:
-- https://support.kraken.com/articles/360042589912-order-minimums-deposit-and-withdrawal-minimums-etc-
-- https://support.kraken.com/articles/360000920306-api-symbols-and-tickers
+For venues that expose separate market-order filters, market orders must not inherit limit-order assumptions. In particular, Binance-style `LOT_SIZE`, `MARKET_LOT_SIZE`, `MIN_NOTIONAL` and `NOTIONAL` semantics must be handled according to order type before market orders can be promoted.
 
 ## Cost model
 
 `allInCostBps = entryFee + exitFee + spread + slippage + adverseSelection + infra + admin`
 
-`MVE = allInCostBps + safetyMargin`
+`costFloorBps = allInCostBps + safetyMargin`
 
-The gate must also compare the net strategy return against the benchmark return over the same holding period. This prevents longer holding periods from manufacturing apparent edge by capturing ordinary market beta.
+`benchmarkHurdleBps = allInCostBps + benchmarkReturnBpsSameHorizon`
 
-### Current Kraken reference tier
+`effectiveHurdleBps = max(costFloorBps, benchmarkHurdleBps)`
 
-As of 2026-09-12, Kraken Pro's published Tier 1 Spot Crypto fees are 0.40% maker and 0.80% taker. These values are inputs, not permanent constants; they must be refreshed before analysis.
+The strategy is economically viable only when its expected gross edge clears `effectiveHurdleBps` and its net return is strictly above the benchmark over the same holding horizon.
 
-Reference: https://www.kraken.com/features/fee-schedule
+`minimumViableEdgeBps` is retained in code only as a backward-compatible alias for `effectiveHurdleBps`; new consumers should use the explicit name.
+
+This prevents a longer holding period from manufacturing apparent alpha by capturing ordinary market beta.
+
+## Microstructure evidence
+
+A single spread snapshot is not sufficient. For a venue/pair/ticket evidence set, the research layer should preserve comparable observations and summarize at least:
+
+- spread p50 / p90 / p99 / max;
+- buy and sell slippage p50 / p90 / p99 / max;
+- insufficient-depth rate;
+- sample count and observation window;
+- capture/error rate where available.
+
+Do not mix venues, symbols or ticket sizes in one statistical evidence set.
 
 ## Reducibility
 
-If the binding minimum is expressed in base quantity, price changes alone do not change the number of base-quantity slices. If the binding minimum is expressed in quote notional, stressed price changes can alter the minimum executable base quantity and therefore the number of exit slices.
+If the binding minimum is expressed in base quantity, price changes alone do not change the number of base-quantity slices. If the binding minimum is expressed in quote notional, adverse price changes can increase the minimum executable base quantity and reduce exit slices.
 
-The final remainder is not a free partial exit. Step-size rounding, partial fills, fee asset and dust can reduce practical flexibility. Reducibility must therefore be recalculated from the actually sellable quantity before exit.
+The final remainder is not a free partial exit. Step-size rounding, partial fills, fees charged in base asset and dust can reduce practical flexibility. Reducibility must therefore be recalculated from the actually sellable quantity before exit.
 
 ## Risk-envelope invariants
 
-A candidate envelope is invalid if its components contradict one another. At minimum:
+A candidate envelope is invalid when its components contradict one another. Current checks include:
 
-- gross exposure <= authorized capital
-- slots × max risk per position <= daily loss limit
-- slot capacity must be able to represent declared gross exposure
-- max drawdown >= max daily loss
-- any required exit-slice count must be achievable both now and under the declared stress case
+- gross exposure <= authorized capital;
+- slots × max risk per position <= daily loss limit;
+- slot capacity can represent declared gross exposure;
+- max drawdown >= max daily loss;
+- required stressed exit slices must be achievable.
 
-Additional spot-only consistency checks remain a tracked follow-up before LIVE integration.
+Additional spot-only consistency checks remain explicit open gates before any LIVE integration.
+
+## Venue selection rule
+
+Venue selection is lexicographic, not a weighted score:
+
+REGULATORY ELIGIBILITY
+  -> TECHNICAL TRADABILITY
+  -> RISK / REDUCIBILITY
+  -> ECONOMICS / EFFECTIVE HURDLE
+  -> REPORTING / OPERATIONS
+  -> ADAPTER BUILD DECISION
+  -> PAPER / TESTNET
+  -> HUMAN-GATED LIVE
+
+A failure in a mandatory gate is not compensated by cheaper fees elsewhere in the scorecard.
 
 ## Governance
 
-P300 may veto or reduce authority. It may not override a rejection from Clodds' native RiskEngine, increase a Clodds-adjusted position size, or place orders directly.
+P300 may veto or reduce authority. It may not override a rejection from Clodds' native RiskEngine, increase a Clodds-adjusted position size, or submit exchange orders directly.
 
-The system Attention Budget remains 20 human-attention hours or 21 active days, whichever comes first. Reaching the budget forces GO / PAUSE / KILL; PAUSE means archived, not background monitoring.
+The system Attention Budget remains 20 human-attention hours or 21 active days, whichever comes first. Reaching the budget forces GO / PAUSE / KILL; PAUSE means archived, not a continuing background scanner.
