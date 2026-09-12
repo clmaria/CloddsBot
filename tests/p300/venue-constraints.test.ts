@@ -6,6 +6,11 @@ import {
   marketConstraintsFromKraken,
 } from '../../src/p300/venue-constraints';
 
+function assertClose(actual: number | undefined, expected: number, tolerance = 1e-12): void {
+  assert.notEqual(actual, undefined);
+  assert.ok(Math.abs((actual as number) - expected) <= tolerance, `expected ${actual} to be within ${tolerance} of ${expected}`);
+}
+
 test('Binance parser maps LOT_SIZE and MIN_NOTIONAL into P300 constraints', () => {
   const result = marketConstraintsFromBinance({
     symbol: 'BTCEUR',
@@ -61,9 +66,9 @@ test('Bitvavo parser maps market minima and quantity precision', () => {
   }, 70_000);
 
   assert.equal(result.symbol, 'BTC-EUR');
-  assert.equal(result.minBaseQty, 0.0001);
+  assertClose(result.minBaseQty, 0.0001);
   assert.equal(result.minQuoteNotional, 5);
-  assert.equal(result.stepSize, 0.0001);
+  assertClose(result.stepSize, 0.0001);
 });
 
 test('Bitvavo parser rejects markets that are not in trading state', () => {
