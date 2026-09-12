@@ -39,7 +39,10 @@ function parseNonce(value: unknown): number {
 
 function parseTimestampNs(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
-  const timestamp = typeof value === 'bigint' ? value.toString() : String(value);
+  if (typeof value !== 'string' && typeof value !== 'bigint') {
+    throw new Error('Bitvavo timestamp must be provided as a precision-safe integer string or bigint');
+  }
+  const timestamp = typeof value === 'bigint' ? value.toString() : value;
   if (!/^\d+$/.test(timestamp)) throw new Error('Bitvavo timestamp must be an integer nanosecond string');
   return timestamp;
 }
