@@ -84,7 +84,7 @@ test('risk envelope rejects internally inconsistent slots and daily loss', () =>
   assert.ok(result.reasons.some(r => r.includes('slots × max risk')));
 });
 
-test('MVE is horizon-aware and must beat same-horizon benchmark', () => {
+test('MVE exposes cost floor separately from same-horizon economic hurdle', () => {
   const result = evaluateEconomics({
     grossEdgeBps: 95,
     entryFeeBps: 10,
@@ -96,7 +96,11 @@ test('MVE is horizon-aware and must beat same-horizon benchmark', () => {
     expectedTradesPerDay: 2,
     benchmarkReturnBpsSameHorizon: 70,
   });
-  assert.equal(result.minimumViableEdgeBps, 40);
+  assert.equal(result.allInCostBps, 30);
+  assert.equal(result.costFloorBps, 40);
+  assert.equal(result.effectiveHurdleBps, 100);
+  assert.equal(result.minimumViableEdgeBps, 100);
+  assert.equal(result.netStrategyReturnBps, 65);
   assert.equal(result.economicallyViable, false);
   assert.ok(result.strategyAlphaBps < 0);
 });
