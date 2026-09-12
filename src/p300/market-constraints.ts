@@ -5,21 +5,43 @@ import type {
   ReducibilitySnapshot,
 } from './types';
 
+function requireFinitePositive(value: number, name: string): void {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be finite and > 0`);
+}
+
+function requireOptionalFiniteNonNegative(value: number | undefined, name: string): void {
+  if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+    throw new Error(`${name} must be finite and >= 0 when configured`);
+  }
+}
+
+function validateMarketInput(input: MarketConstraintsInput): void {
+  if (!input.venue.trim()) throw new Error('venue is required');
+  if (!input.symbol.trim()) throw new Error('symbol is required');
+  requireFinitePositive(input.price, 'price');
+  requireOptionalFiniteNonNegative(input.minBaseQty, 'minimum base quantity');
+  requireOptionalFiniteNonNegative(input.minQuoteNotional, 'minimum quote notional');
+  if (input.stepSize !== undefined) requireFinitePositive(input.stepSize, 'step size');
+  if ((input.minBaseQty ?? 0) <= 0 && (input.minQuoteNotional ?? 0) <= 0) {
+    throw new Error('at least one positive executable minimum is required');
+  }
+}
+
 function ceilToStep(value: number, step?: number): number {
-  if (!step || step <= 0) return value;
+  if (step === undefined) return value;
   return Math.ceil(value / step - 1e-12) * step;
 }
 
 function floorToStep(value: number, step?: number): number {
-  if (!step || step <= 0) return value;
+  if (step === undefined) return value;
   return Math.floor(value / step + 1e-12) * step;
 }
 
 export function deriveMarketConstraints(input: MarketConstraintsInput): MarketConstraints {
-  if (!(input.price > 0)) throw new Error('price must be > 0');
+  validateMarketInput(input);
 
-  const minBase = Math.max(0, input.minBaseQty ?? 0);
-  const quoteImpliedBase = Math.max(0, (input.minQuoteNotional ?? 0) / input.price);
+  const minBase = input.minBaseQty ?? 0;
+  const quoteImpliedBase = (input.minQuoteNotional ?? 0) / input.price;
   const quoteBaseRounded = ceilToStep(quoteImpliedBase, input.stepSize);
   const baseRounded = ceilToStep(minBase, input.stepSize);
   const minExecutableBaseQty = Math.max(baseRounded, quoteBaseRounded);
@@ -41,10 +63,19 @@ export function deriveMarketConstraints(input: MarketConstraintsInput): MarketCo
     bindingConstraint = 'quote';
   }
 
+  const minExecutableNotional = Math.max(
+    baseNotional,
+    quoteNotional,
+    minExecutableBaseQty * input.price,
+  );
+  if (!Number.isFinite(minExecutableBaseQty) || !Number.isFinite(minExecutableNotional)) {
+    throw new Error('derived market constraints are not finite');
+  }
+
   return {
     ...input,
     minExecutableBaseQty,
-    minExecutableNotional: Math.max(baseNotional, quoteNotional, minExecutableBaseQty * input.price),
+    minExecutableNotional,
     bindingConstraint,
   };
 }
@@ -54,9 +85,14 @@ export function calculateReducibility(
   constraintsInput: MarketConstraintsInput,
   priceOverride?: number
 ): ReducibilitySnapshot {
+  if (!Number.isFinite(positionBaseQty) || positionBaseQty < 0) {
+    throw new Error('position base quantity must be finite and >= 0');
+  }
+  if (priceOverride !== undefined) requireFinitePositive(priceOverride, 'price override');
+
   const price = priceOverride ?? constraintsInput.price;
   const constraints = deriveMarketConstraints({ ...constraintsInput, price });
-  const sellable = floorToStep(Math.max(0, positionBaseQty), constraints.stepSize);
+  const sellable = floorToStep(positionBaseQty, constraints.stepSize);
   const minQty = constraints.minExecutableBaseQty;
 
   if (!(minQty > 0) || !(sellable > 0)) {
@@ -95,6 +131,6 @@ export function calculateStressedReducibility(
   constraints: MarketConstraintsInput,
   adversePrice: number
 ): ReducibilitySnapshot {
-  if (!(adversePrice > 0)) throw new Error('adversePrice must be > 0');
+  requireFinitePositive(adversePrice, 'adverse price');
   return calculateReducibility(positionBaseQty, constraints, adversePrice);
 }
