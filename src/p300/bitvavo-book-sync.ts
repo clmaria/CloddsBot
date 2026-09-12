@@ -146,20 +146,29 @@ export function applyBitvavoBookUpdate(
 }
 
 /**
- * Reconciles a REST/WS snapshot with buffered book events. Updates at or below
- * the snapshot nonce are discarded; every remaining event must then be exactly
- * contiguous. Any gap/duplicate fails closed so the caller can restart sync.
+ * Reconciles a snapshot with buffered book events using Bitvavo's published
+ * local-book procedure. When buffered updates exist, the snapshot must have
+ * advanced beyond the first buffered update before it is accepted. Updates at
+ * or below the snapshot nonce are then discarded; every remaining event must
+ * be exactly contiguous. Any mismatch fails closed so the caller can refetch.
  */
 export function synchronizeBitvavoBook(
   snapshot: BitvavoSnapshotLike,
   bufferedUpdates: BitvavoBookUpdateLike[],
 ): BitvavoLocalBookState {
   let state = createBitvavoLocalBook(snapshot);
-  const applicable = bufferedUpdates
+  if (bufferedUpdates.length === 0) return state;
+
+  const ordered = bufferedUpdates
     .map((update, index) => ({ update, nonce: parseNonce(update.nonce), index }))
-    .filter((item) => item.nonce > state.nonce)
     .sort((a, b) => a.nonce - b.nonce || a.index - b.index);
 
+  const firstBufferedNonce = ordered[0].nonce;
+  if (state.nonce <= firstBufferedNonce) {
+    throw new Error('Bitvavo snapshot has not overtaken the initial buffered update; refetch snapshot');
+  }
+
+  const applicable = ordered.filter((item) => item.nonce > state.nonce);
   for (const item of applicable) state = applyBitvavoBookUpdate(state, item.update);
   return state;
 }
