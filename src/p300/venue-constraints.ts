@@ -78,3 +78,56 @@ export function marketConstraintsFromKraken(
     stepSize,
   };
 }
+
+export interface BitvavoMarketLike {
+  market: string;
+  status?: string;
+  base?: string;
+  quote?: string;
+  minOrderInBaseAsset?: string;
+  minOrderInQuoteAsset?: string;
+  quantityDecimals?: string | number;
+  tickSize?: string;
+  orderTypes?: string[];
+}
+
+export function marketConstraintsFromBitvavo(
+  market: BitvavoMarketLike,
+  price: number,
+  venue = 'bitvavo'
+): MarketConstraintsInput {
+  if (!(price > 0)) throw new Error('price must be > 0');
+  if (market.status !== undefined && market.status !== 'trading') {
+    throw new Error(`Bitvavo market is not trading: ${market.status}`);
+  }
+
+  const minBaseQty = market.minOrderInBaseAsset !== undefined
+    ? Number(market.minOrderInBaseAsset)
+    : undefined;
+  const minQuoteNotional = market.minOrderInQuoteAsset !== undefined
+    ? Number(market.minOrderInQuoteAsset)
+    : undefined;
+  const quantityDecimals = market.quantityDecimals !== undefined
+    ? Number(market.quantityDecimals)
+    : undefined;
+  const stepSize = quantityDecimals !== undefined ? 10 ** -quantityDecimals : undefined;
+
+  if (minBaseQty !== undefined && !Number.isFinite(minBaseQty)) {
+    throw new Error('invalid Bitvavo minOrderInBaseAsset');
+  }
+  if (minQuoteNotional !== undefined && !Number.isFinite(minQuoteNotional)) {
+    throw new Error('invalid Bitvavo minOrderInQuoteAsset');
+  }
+  if (quantityDecimals !== undefined && (!Number.isInteger(quantityDecimals) || quantityDecimals < 0)) {
+    throw new Error('invalid Bitvavo quantityDecimals');
+  }
+
+  return {
+    venue,
+    symbol: market.market,
+    price,
+    minBaseQty,
+    minQuoteNotional,
+    stepSize,
+  };
+}
