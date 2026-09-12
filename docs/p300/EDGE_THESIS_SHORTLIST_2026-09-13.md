@@ -1,10 +1,10 @@
 # P300 Edge Thesis Shortlist — 2026-09-13
 
-Status: **RESEARCH / PAPER ONLY**. This document authorizes no LIVE trading, no capital increase, no exchange connection, and no weakening of the Risk Envelope.
+Status: **RESEARCH / PAPER ONLY**. This document authorizes no LIVE trading, no capital increase, no exchange connection, no shorting and no weakening of the Risk Envelope.
 
 ## Decision this document supports
 
-Choose the smallest next experiment that can falsify a plausible short-term spot edge before P300 spends more user attention or builds an execution adapter.
+Choose the smallest next experiment that can falsify a plausible short-term Spot edge before P300 spends more user attention or builds an execution adapter.
 
 The decision is not “which indicator looks best?” It is: **is there a structural source of realizable net edge, after fees and execution effects, that can plausibly survive at P300 scale?**
 
@@ -58,29 +58,15 @@ Source:
 
 A global reference venue moves first and Bitvavo reprices later, leaving a temporarily stale executable quote.
 
-### Who is on the other side?
+### Counterparty and mechanism
 
-Liquidity providers whose Bitvavo quote has not yet updated, or local inventory/order flow that temporarily leaves a stale quote available.
-
-### Sustaining mechanism
-
-Venue fragmentation, network and matching latency, and local liquidity-provider inventory/repricing delays.
+The other side would be liquidity providers whose local quote has not yet updated, or local inventory/order flow that temporarily leaves a stale quote available. The proposed sustaining mechanism is venue fragmentation plus network, matching and local inventory/repricing delays.
 
 ### Adversarial check
 
 This is one of the most competed HFT anomalies in crypto. Professional market makers already observe multiple venues and can reprice in milliseconds. A public-feed retail bot may see the opportunity only after it has disappeared. Therefore “global venue moved first” is **not** itself evidence of edge.
 
 EUR is especially unattractive because a taker/taker round trip starts at 50 bps before spread/slippage. USDC lowers the fee floor to 10 bps, but that only makes the thesis testable; it does not prove it.
-
-### Regime
-
-Only investigate when:
-- both feeds are fresh and sequence-consistent;
-- target market is trading normally;
-- depth is sufficient for the fixed test ticket;
-- target spread is inside its preregistered range;
-- stablecoin basis/reference conversion is measured, not assumed;
-- no stale/future timestamps are accepted.
 
 ### Falsifiers
 
@@ -94,28 +80,20 @@ Reject the thesis if any of these hold after preregistered validation:
 
 ### Half-life
 
-**Unknown; measure it.** Do not assume milliseconds, seconds, or minutes. Measure fixed horizons and reject if the economic effect decays before a realistic executable path can act.
+**Unknown; measure it.** Do not assume milliseconds, seconds, or minutes.
 
 ## Thesis B — Standalone order-book imbalance
 
 **Classification: COMBINE, not a standalone Edge Thesis.**
 
-### Anomaly
-
-Top-of-book/depth imbalance predicts the next local price move.
-
-### Structural concern
-
-Order-book imbalance is public, common and heavily competed. Its predictive half-life is often precisely where latency and adverse selection matter most. Even if statistically predictive, a few-bps next move is not economically useful if fees and execution consume it.
-
-### Decision
+Top-of-book/depth imbalance can be predictive, but it is public, common and heavily competed. A statistically predictive few-bps next move is not economically useful if fees and execution consume it.
 
 Do **not** build an “imbalance strategy.” Use imbalance only as a conditioning / veto feature inside another thesis:
 - reject entries that fight local order flow;
 - identify adverse-selection regimes;
 - segment results by imbalance bucket after the primary hypothesis is fixed.
 
-It may improve another edge; it does not currently earn a separate strategy slot or separate multiple-testing budget.
+It may improve another edge; it does not earn a separate strategy slot or separate multiple-testing budget today.
 
 ## Thesis C — Cross-venue-anchored passive reversion
 
@@ -127,23 +105,30 @@ Bitvavo temporarily **overshoots** a fresh cross-venue fair-value reference beca
 
 This differs from taker lead/lag. The bot is not trying to win a raw latency race by crossing a stale ask/bid. It waits for a local dislocation and tests whether providing liquidity on the reversion side is compensated after costs.
 
-### Who is on the other side?
+### Counterparty and sustaining mechanism
 
-Impatient or inventory-motivated local takers who demand immediacy during a transient flow shock.
-
-### Sustaining mechanism
-
-The proposed economic mechanism is compensation for supplying liquidity during temporary local inventory/order-flow imbalance, with an external venue composite acting as a fair-value anchor.
+The proposed counterparty is impatient or inventory-motivated local flow demanding immediacy during a transient shock. The proposed edge is compensation for supplying liquidity during that temporary imbalance, with an external venue composite acting as a fair-value anchor.
 
 This mechanism is plausible but **unproven**. The experiment must attempt to falsify it.
 
 ### Why this candidate outranks the others
 
 1. It does not require P300 to win a pure latency race against professional market makers.
-2. It can use maker execution in the eventual implementation.
+2. It can use maker execution in a future implementation.
 3. BTC/USDC on Bitvavo has a 10 bps fee-only round-trip floor versus 30 bps maker/maker on BTC/EUR.
 4. Cross-venue fair value and local imbalance can be used as independent guards instead of multiplying unrelated strategies.
 5. It fits low-touch bounded autonomy better than continuous two-sided market making: the system may stay idle until a preregistered dislocation appears.
+
+### Spot asymmetry: Phase A is long-only for executable hypotheses
+
+P300 does not permit leverage, futures, margin or shorting. A Spot reversion thesis is therefore **not symmetric** unless P300 deliberately carries a base-asset inventory.
+
+- If Bitvavo BTC-USDC is **cheap** versus the reference, a future Spot implementation could buy BTC and later sell it after reversion.
+- If Bitvavo BTC-USDC is **expensive** versus the reference, monetizing that side requires pre-existing BTC inventory to sell first and buy back later.
+
+Maintaining BTC inventory would add continuous market exposure unrelated to the transient trade and would change the Risk Envelope. That is **not automatically authorized**.
+
+Therefore Phase A records both directions for research, but only the **underpriced / buy-first** direction counts as executable under the current long-only envelope. If evidence exists only on the overpricing side, the result is not “add inventory”; it is **NO-GO under the current envelope or a new human-gated inventory decision**.
 
 ### Important trade-off: USDC
 
@@ -178,7 +163,8 @@ Reject or PAUSE if:
 5. the effect requires parameter hunting across many windows/bins;
 6. the best effect occurs only at a half-life shorter than realistic cancel/replace latency;
 7. net economic edge is too small relative to operational/tax-ledger burden;
-8. the number of independent opportunities is too small to earn P300 attention.
+8. the number of independent opportunities is too small to earn P300 attention;
+9. the measurable edge exists only on the overpricing side that requires unauthorized base inventory.
 
 ### Half-life
 
@@ -190,7 +176,9 @@ Unknown. Measure forward reversion at **fixed, preregistered horizons** rather t
 
 Collect **30 independent dislocation episodes** for BTC-USDC plus BTC-EUR as a control. Each episode stores one immutable evidence envelope containing:
 - venue / pair;
-- exchange timestamp and local monotonic receive timestamp;
+- direction (`underpriced` or `overpriced`);
+- whether the direction is executable under the current long-only envelope;
+- exchange timestamp and local receive timestamp;
 - raw target best bid/ask + depth snapshot;
 - local trades around the event;
 - reference price inputs and timestamps;
@@ -198,27 +186,18 @@ Collect **30 independent dislocation episodes** for BTC-USDC plus BTC-EUR as a c
 - local spread and imbalance;
 - fixed-ticket executable VWAP/slippage;
 - forward target/reference values at preregistered horizons;
-- hypothetical maker price and whether it would have been fillable under conservative rules;
+- hypothetical maker price and conservative fill state;
 - constraints/policy/source-version hashes.
 
 Phase A answers only: **is there enough economic room to justify a larger test?** It cannot promote LIVE or establish statistical significance.
 
 ### Phase B — only if Phase A survives
 
-Freeze:
-- signal definition;
-- deviation bins;
-- horizons;
-- fill model(s);
-- primary metric;
-- cost assumptions;
-- kill criteria.
-
-Then collect at least **100 additional independent episodes** and evaluate OOS. Keep dual/adversarial fill assumptions. Do not select the winning window from the same sample used to report performance.
+Freeze the signal definition, deviation bins, horizons, fill models, primary metric, cost assumptions and kill criteria. Then collect at least **100 additional independent episodes** and evaluate OOS. Keep dual/adversarial fill assumptions. Do not select the winning window from the same sample used to report performance.
 
 ## Required market-data path
 
-Bitvavo standard WebSocket already exposes the necessary read-only primitives:
+Bitvavo standard WebSocket exposes the necessary read-only primitives:
 - `book` subscription with order-book updates, nonce and nanosecond timestamp;
 - `trades` subscription with millisecond and nanosecond timestamps;
 - public `GET /markets` for status, minimums, tick size and fee category.
@@ -234,18 +213,19 @@ The existing Clodds `CryptoFeed` can be reused conceptually as a global referenc
 
 **No Risk Envelope changes.**
 
-The discovery of cheaper USDC fees does not justify increasing exposure, daily loss, drawdown, slots or risk per position. First determine whether an edge exists within the already acceptable risk envelope; if the venue/pair cannot implement it safely, the correct answer is NO-GO.
+Cheaper USDC fees do not justify increasing exposure, daily loss, drawdown, slots, risk per position or persistent BTC inventory. First determine whether an edge exists within the already acceptable long-only envelope; if the venue/pair cannot implement it safely, the correct answer is NO-GO.
 
 ## Promotion state
 
 - Thesis A BTC/EUR taker lag: **REJECT primary / CONTROL only**
 - Thesis A BTC/USDC taker lag: **WATCH / diagnostic only**
 - Thesis B standalone imbalance: **COMBINE as filter; no independent strategy**
-- Thesis C BTC-USDC anchored passive reversion: **EXPERIMENT**
-- Thesis C BTC-EUR anchored passive reversion: **CONTROL / comparator**
+- Thesis C BTC-USDC anchored passive reversion, underpriced side: **EXPERIMENT**
+- Thesis C BTC-USDC anchored passive reversion, overpriced side: **RESEARCH ONLY unless inventory is separately human-authorized**
+- Thesis C BTC/EUR anchored passive reversion: **CONTROL / comparator**
 
 No thesis is GO, PAPER_READY or LIVE_READY yet.
 
 ## Next action
 
-Build only a **read-only evidence collector/analyzer** for Thesis C. Do not build an execution adapter. The collector must be incapable of submitting orders and must fail closed on stale, malformed, out-of-sequence, or incomparable data.
+Build only a **read-only evidence collector/analyzer** for Thesis C. Do not build an execution adapter. The collector must be incapable of submitting orders and must fail closed on stale, malformed, out-of-sequence or incomparable data.
