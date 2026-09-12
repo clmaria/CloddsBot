@@ -21,7 +21,7 @@ function economics(overrides: Partial<OrderBookEconomics> = {}): OrderBookEconom
   };
 }
 
-test('microstructure summary reports p50/p90/p99 and depth failure rates', () => {
+test('microstructure summary separates depth failures from fillable slippage distributions', () => {
   const summary = summarizeMicrostructure([
     { observedAtMs: 1000, economics: economics({ spreadBps: 1, buySlippageBps: 0, sellSlippageBps: 0 }) },
     { observedAtMs: 2000, economics: economics({ spreadBps: 2, buySlippageBps: 1, sellSlippageBps: 1 }) },
@@ -34,10 +34,29 @@ test('microstructure summary reports p50/p90/p99 and depth failure rates', () =>
   assert.ok(summary.spreadBps.p90 > 14 && summary.spreadBps.p90 < 15);
   assert.ok(summary.spreadBps.p99 > 19);
   assert.equal(summary.spreadBps.max, 20);
+
+  assert.equal(summary.buyFillableSampleCount, 3);
+  assert.equal(summary.sellFillableSampleCount, 4);
   assert.equal(summary.buyInsufficientDepthRate, 0.25);
   assert.equal(summary.sellInsufficientDepthRate, 0);
+
+  assert.notEqual(summary.buySlippageBps, null);
+  assert.notEqual(summary.sellSlippageBps, null);
+  assert.equal(summary.buySlippageBps?.max, 2);
+  assert.equal(summary.sellSlippageBps?.max, 8);
   assert.equal(summary.firstObservedAtMs, 1000);
   assert.equal(summary.lastObservedAtMs, 4000);
+});
+
+test('slippage distribution is null when no snapshot can fully fill the ticket', () => {
+  const summary = summarizeMicrostructure([
+    { observedAtMs: 1000, economics: economics({ buyFullyFillable: false, buySlippageBps: 1 }) },
+    { observedAtMs: 2000, economics: economics({ buyFullyFillable: false, buySlippageBps: 2 }) },
+  ]);
+
+  assert.equal(summary.buyFillableSampleCount, 0);
+  assert.equal(summary.buyInsufficientDepthRate, 1);
+  assert.equal(summary.buySlippageBps, null);
 });
 
 test('microstructure summary rejects empty or invalid samples', () => {
