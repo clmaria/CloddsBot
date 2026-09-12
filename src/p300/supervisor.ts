@@ -18,6 +18,37 @@ export interface SupervisorDecision {
   state: SupervisorState;
 }
 
+function validateConfig(config: SupervisorConfig): void {
+  if (!Number.isInteger(config.maxConsecutiveDecisionFailures) || config.maxConsecutiveDecisionFailures <= 0) {
+    throw new Error('max consecutive decision failures must be a positive integer');
+  }
+  if (!Number.isInteger(config.recoverySuccessesRequired) || config.recoverySuccessesRequired <= 0) {
+    throw new Error('recovery successes required must be a positive integer');
+  }
+  if (!Number.isInteger(config.maxEntriesPerHour) || config.maxEntriesPerHour < 0) {
+    throw new Error('max entries per hour must be a non-negative integer');
+  }
+}
+
+function validateState(state: SupervisorState): void {
+  if (!Number.isInteger(state.consecutiveDecisionFailures) || state.consecutiveDecisionFailures < 0) {
+    throw new Error('consecutive decision failures must be a non-negative integer');
+  }
+  if (!Number.isInteger(state.recoverySuccesses) || state.recoverySuccesses < 0) {
+    throw new Error('recovery successes must be a non-negative integer');
+  }
+  if (!Array.isArray(state.entryTimestamps)) throw new Error('entry timestamps must be an array');
+  for (const timestamp of state.entryTimestamps) {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      throw new Error('entry timestamps must be positive finite values');
+    }
+  }
+}
+
+function validateNow(now: number): void {
+  if (!Number.isFinite(now) || now <= 0) throw new Error('current time must be a positive finite timestamp');
+}
+
 export function createSupervisorState(): SupervisorState {
   return {
     safeMode: false,
@@ -28,6 +59,8 @@ export function createSupervisorState(): SupervisorState {
 }
 
 function pruneEntries(state: SupervisorState, now: number): SupervisorState {
+  validateState(state);
+  validateNow(now);
   const cutoff = now - 60 * 60 * 1000;
   return { ...state, entryTimestamps: state.entryTimestamps.filter(ts => ts > cutoff) };
 }
@@ -37,6 +70,10 @@ export function recordDecisionFailure(
   config: SupervisorConfig,
   reason = 'decision layer failure'
 ): SupervisorState {
+  validateState(state);
+  validateConfig(config);
+  if (!reason.trim()) throw new Error('decision failure reason is required');
+
   const failures = state.consecutiveDecisionFailures + 1;
   if (failures >= config.maxConsecutiveDecisionFailures) {
     return {
@@ -54,6 +91,9 @@ export function recordDecisionSuccess(
   state: SupervisorState,
   config: SupervisorConfig
 ): SupervisorState {
+  validateState(state);
+  validateConfig(config);
+
   if (!state.safeMode) {
     return { ...state, consecutiveDecisionFailures: 0, recoverySuccesses: 0 };
   }
@@ -77,6 +117,7 @@ export function canOpenNewExposure(
   config: SupervisorConfig,
   now = Date.now()
 ): SupervisorDecision {
+  validateConfig(config);
   const state = pruneEntries(stateInput, now);
 
   if (state.safeMode) {
