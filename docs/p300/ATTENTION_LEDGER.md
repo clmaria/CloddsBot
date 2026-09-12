@@ -19,7 +19,8 @@ This ledger exists to prevent infrastructure work from quietly becoming an unlim
 | pre-2026-09-12 | Earlier P300 / Trading Lab research, architecture and implementation | pending conservative reconciliation | ESTIMATED |
 | 2026-09-12 | CloddsBot fork integration: P300 governance, NOFX comparison, CI debugging, market-constraint validation | 0.5 h | ESTIMATED |
 | 2026-09-12 | Economics Gate: venue constraints, stressed reducibility, same-horizon benchmark and matrix tests | 0.5 h | ESTIMATED |
+| 2026-09-12 | Venue/economics evidence: MiCA gate, fee baselines, effective-hurdle refactor and MVE sensitivity | 0.5 h | ESTIMATED |
 
 ## Remaining budget
 
-Cannot be stated honestly until the historical block is reconciled. It must not be reported as 19.0 h remaining.
+Cannot be stated honestly until the historical block is reconciled. It must not be reported as 18.5 h remaining.
