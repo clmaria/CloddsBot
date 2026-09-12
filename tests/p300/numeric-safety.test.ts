@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { authorizeCapital, degradeAuthority, evaluateFastGate, validateRiskEnvelope } from '../../src/p300/index';
+import {
+  authorizeCapital,
+  canOpenNewExposure,
+  createSupervisorState,
+  degradeAuthority,
+  evaluateFastGate,
+  validateRiskEnvelope,
+} from '../../src/p300/index';
 import { deriveMarketConstraints, calculateReducibility } from '../../src/p300/market-constraints';
 import { evaluateEconomics } from '../../src/p300/economics';
 import { evaluateOrderBookEconomics } from '../../src/p300/order-book-economics';
+import { evaluateAttentionGate } from '../../src/p300/preflight';
 import { calculateProfitReserve, evaluateSweep } from '../../src/p300/profit-reserve';
 
 test('capital authority rejects NaN, Infinity and invalid observed state', () => {
@@ -65,10 +73,13 @@ test('market constraints and reducibility reject invalid numeric market data', (
     venue: 'x', symbol: 'BTC/EUR', price: Number.POSITIVE_INFINITY, minQuoteNotional: 5,
   }));
   assert.throws(() => deriveMarketConstraints({
-    venue: 'x', symbol: 'BTC/EUR', price: 50_000, stepSize: Number.NaN,
+    venue: 'x', symbol: 'BTC/EUR', price: 50_000, stepSize: Number.NaN, minQuoteNotional: 5,
   }));
   assert.throws(() => deriveMarketConstraints({
     venue: 'x', symbol: 'BTC/EUR', price: 50_000, minQuoteNotional: -5,
+  }));
+  assert.throws(() => deriveMarketConstraints({
+    venue: 'x', symbol: 'BTC/EUR', price: 50_000,
   }));
   assert.throws(() => calculateReducibility(Number.NaN, {
     venue: 'x', symbol: 'BTC/EUR', price: 50_000, minQuoteNotional: 5,
@@ -89,6 +100,27 @@ test('economics rejects impossible negative/non-finite cost inputs', () => {
   assert.throws(() => evaluateEconomics({ ...base, entryFeeBps: -1 }));
   assert.throws(() => evaluateEconomics({ ...base, spreadBps: Number.NaN }));
   assert.throws(() => evaluateEconomics({ ...base, grossEdgeBps: Number.POSITIVE_INFINITY }));
+});
+
+test('supervisor and attention gates reject invalid numeric control state', () => {
+  const state = createSupervisorState();
+  assert.throws(() => canOpenNewExposure(state, {
+    maxConsecutiveDecisionFailures: 3,
+    recoverySuccessesRequired: 2,
+    maxEntriesPerHour: Number.NaN,
+  }));
+  assert.throws(() => evaluateAttentionGate({
+    maxHumanHours: 20,
+    consumedHumanHours: Number.NaN,
+    maxActiveDays: 21,
+    activeDays: 1,
+  }));
+  assert.throws(() => evaluateAttentionGate({
+    maxHumanHours: 20,
+    consumedHumanHours: 1,
+    maxActiveDays: 21,
+    activeDays: Number.POSITIVE_INFINITY,
+  }));
 });
 
 test('order-book and profit-reserve calculations reject non-finite economic inputs', () => {
