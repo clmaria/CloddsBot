@@ -44,10 +44,15 @@ test('quote minimum erodes reducibility when price falls', () => {
     venue: 'example', symbol: 'BTC/EUR', price: 70_000,
     minQuoteNotional: 5, stepSize: 0.000001,
   };
-  const qty = 10 / 70_000;
+  // 0.000145 BTC is deliberately chosen so that, after lot-step rounding,
+  // it contains two executable 0.000072 BTC slices at EUR 70k but only one
+  // executable 0.000143 BTC slice at EUR 35k. This validates quote-minimum
+  // erosion without relying on an impossible fractional lot.
+  const qty = 0.000145;
   const now = calculateReducibility(qty, market);
   const stressed = calculateStressedReducibility(qty, market, 35_000);
-  assert.ok(now.totalExitSlices >= 2);
+  assert.equal(now.totalExitSlices, 2);
+  assert.equal(stressed.totalExitSlices, 1);
   assert.ok(stressed.totalExitSlices < now.totalExitSlices);
   assert.equal(stressed.bindingConstraint, 'quote');
 });
