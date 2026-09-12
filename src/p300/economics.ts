@@ -13,15 +13,27 @@ export function evaluateEconomics(input: EconomicsInput): EconomicsResult {
     (input.infraCostBps ?? 0) +
     (input.adminCostBps ?? 0);
 
-  const minimumViableEdgeBps = allInCostBps + (input.safetyMarginBps ?? 0);
+  const safetyMarginBps = input.safetyMarginBps ?? 0;
+  const costFloorBps = allInCostBps + safetyMarginBps;
+
+  // A strategy must clear both execution economics and the return of doing
+  // nothing / holding the benchmark over the exact same horizon. The economic
+  // hurdle is therefore the stricter of the two requirements.
+  const benchmarkHurdleBps = allInCostBps + input.benchmarkReturnBpsSameHorizon;
+  const effectiveHurdleBps = Math.max(costFloorBps, benchmarkHurdleBps);
+
   const netStrategyReturnBps = input.grossEdgeBps - allInCostBps;
   const strategyAlphaBps = netStrategyReturnBps - input.benchmarkReturnBpsSameHorizon;
   const beatsBenchmark = strategyAlphaBps > 0;
-  const economicallyViable = input.grossEdgeBps >= minimumViableEdgeBps && beatsBenchmark;
+  const economicallyViable = input.grossEdgeBps >= effectiveHurdleBps && beatsBenchmark;
 
   return {
     allInCostBps,
-    minimumViableEdgeBps,
+    costFloorBps,
+    effectiveHurdleBps,
+    // Backward-compatible alias. New consumers should prefer effectiveHurdleBps.
+    minimumViableEdgeBps: effectiveHurdleBps,
+    netStrategyReturnBps,
     strategyAlphaBps,
     beatsBenchmark,
     economicallyViable,
