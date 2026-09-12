@@ -55,7 +55,7 @@ test('Bitvavo local book fails closed on gaps, duplicates and market mismatch', 
   }), /market does not match/);
 });
 
-test('Bitvavo synchronization discards buffered events at or below snapshot and requires contiguous remainder', () => {
+test('Bitvavo synchronization requires snapshot to overtake initial buffered update, discards old events and applies contiguous remainder', () => {
   const state = synchronizeBitvavoBook(SNAPSHOT, [
     { event: 'book', market: 'BTC-USDC', nonce: 99, bids: [['97', '1']], asks: [] },
     { event: 'book', market: 'BTC-USDC', nonce: 100, bids: [['98', '9']], asks: [] },
@@ -69,6 +69,11 @@ test('Bitvavo synchronization discards buffered events at or below snapshot and 
   assert.equal(state.bids['97'], undefined);
 
   assert.throws(() => synchronizeBitvavoBook(SNAPSHOT, [
+    { event: 'book', market: 'BTC-USDC', nonce: 101, bids: [], asks: [] },
+  ]), /has not overtaken/);
+
+  assert.throws(() => synchronizeBitvavoBook(SNAPSHOT, [
+    { event: 'book', market: 'BTC-USDC', nonce: 99, bids: [], asks: [] },
     { event: 'book', market: 'BTC-USDC', nonce: 102, bids: [], asks: [] },
   ]), /sequence gap/);
 });
