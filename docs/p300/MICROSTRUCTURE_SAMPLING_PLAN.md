@@ -19,13 +19,18 @@ Quote-ticket sizes:
 - EUR 10
 - EUR 25
 
-The same raw order-book snapshot may be evaluated against all three ticket sizes. Never mix different ticket sizes in one statistical evidence set.
+The same raw order-book snapshot may be evaluated against all three ticket sizes. Never mix different ticket sizes, venues or symbols in one statistical evidence set.
+
+For a quote ticket:
+- buy-side analysis spends the declared EUR amount across asks;
+- sell-side analysis fixes the base quantity equivalent to that EUR ticket at best bid, then measures the actual proceeds through bid depth;
+- the sell model must not silently sell more base merely to preserve the requested EUR proceeds.
 
 Initial sample target per venue/pair:
-- 30 independent snapshots minimum.
-- Split across at least 3 materially different time windows rather than one burst.
-- At least one sample window should include a higher-activity Europe/US overlap.
-- If Phase A results are near an economic decision boundary or show unstable tails, extend to Phase B rather than declaring PASS.
+- 30 independent snapshots minimum;
+- split across at least 3 materially different time windows rather than one burst;
+- at least one sample window should include a higher-activity Europe/US overlap;
+- if Phase A results are near an economic decision boundary or show unstable tails, extend to Phase B rather than declaring PASS.
 
 ## Phase B — confirmation sample
 
@@ -39,18 +44,20 @@ Only for candidates surviving Phase A:
 ## Metrics
 
 For each venue / pair / ticket combination:
-- spread bps p50 / p90 / p99 / max;
-- buy slippage bps p50 / p90 / p99 / max;
-- sell slippage bps p50 / p90 / p99 / max;
+- spread bps p50 / p90 / p99 / max across valid snapshots;
+- buy slippage bps p50 / p90 / p99 / max across fully fillable buy snapshots only;
+- sell slippage bps p50 / p90 / p99 / max across fully fillable sell snapshots only;
+- fully-fillable sample count by side;
 - insufficient-depth rate for buys and sells;
 - capture/error rate;
 - observation window start/end;
-- sample count.
+- total sample count.
+
+If a side has zero fully-fillable observations, its slippage distribution is `null`; that is evidence of insufficient depth, not zero slippage.
 
 ## Economics use
 
-Microstructure metrics do not create a standalone PASS threshold.
-They feed the economics model together with:
+Microstructure metrics do not create a standalone PASS threshold. They feed the economics model together with:
 - maker/taker fees;
 - adverse selection;
 - maker non-fill opportunity cost when applicable;
@@ -63,8 +70,7 @@ Use representative/tail scenarios, not only p50:
 - conservative case should include p90;
 - p99/max are stress diagnostics, not automatically assumed every trade.
 
-The output is `effectiveHurdleBps`, not a signal-search target.
-A strategy still needs a structural Edge Thesis capable of plausibly clearing that hurdle.
+The output is `effectiveHurdleBps`, not a signal-search target. A strategy still needs a structural Edge Thesis capable of plausibly clearing that hurdle.
 
 ## Stop rules
 
