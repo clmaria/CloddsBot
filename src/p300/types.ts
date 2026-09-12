@@ -59,7 +59,10 @@ export interface EconomicsInput {
 
 export interface EconomicsResult {
   allInCostBps: number;
+  costFloorBps: number;
+  effectiveHurdleBps: number;
   minimumViableEdgeBps: number;
+  netStrategyReturnBps: number;
   strategyAlphaBps: number;
   beatsBenchmark: boolean;
   economicallyViable: boolean;
