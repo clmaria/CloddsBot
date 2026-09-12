@@ -21,6 +21,8 @@ export interface ConservativeMakerFillRequest {
   limitPrice: number;
   baseQty: number;
   activatedAtNs: string;
+  /** Last exchange timestamp at which the hypothetical order is considered live. */
+  activeUntilNs: string;
   activationBook: OrderBookSnapshot;
   trades: ObservedPublicTrade[];
   /** Caller attests there was no detected gap/disconnect in the trade stream. */
@@ -96,6 +98,8 @@ function validatesTrade(trade: ObservedPublicTrade, expectedMarket: string): big
  * - Only opposite-side taker trades at the limit consume queue ahead.
  * - A trade through the limit implies full fill only when the caller verifies
  *   continuous trade-stream integrity and regular trading.
+ * - Fills are bounded by an explicit predeclared active window; later trades
+ *   cannot retroactively fill an order that the strategy would have cancelled.
  * - This function performs no networking and cannot place or cancel orders.
  */
 export function simulateConservativeMakerFill(
@@ -107,6 +111,8 @@ export function simulateConservativeMakerFill(
   assertPositiveFinite(request.limitPrice, 'limitPrice');
   assertPositiveFinite(request.baseQty, 'baseQty');
   const activatedAtNs = parseNs(request.activatedAtNs, 'activatedAtNs');
+  const activeUntilNs = parseNs(request.activeUntilNs, 'activeUntilNs');
+  if (activeUntilNs <= activatedAtNs) throw new Error('activeUntilNs must be after activatedAtNs');
   if (!request.tradeStreamIntegrityVerified) throw new Error('trade stream integrity is not verified');
   if (!request.regularTradingVerified) throw new Error('regular trading is not verified');
 
@@ -147,6 +153,7 @@ export function simulateConservativeMakerFill(
 
   for (const item of trades) {
     if (item.timestamp < activatedAtNs) continue;
+    if (item.timestamp > activeUntilNs) break;
     const trade = item.trade;
     const consumesOurSide = request.side === 'buy' ? trade.takerSide === 'sell' : trade.takerSide === 'buy';
     if (!consumesOurSide) continue;
