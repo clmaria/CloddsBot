@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   marketConstraintsFromBinance,
+  marketConstraintsFromBitvavo,
   marketConstraintsFromKraken,
 } from '../../src/p300/venue-constraints';
 
@@ -46,6 +47,35 @@ test('Kraken parser maps ordermin, costmin and lot precision', () => {
   assert.equal(result.stepSize, 1e-8);
 });
 
+test('Bitvavo parser maps market minima and quantity precision', () => {
+  const result = marketConstraintsFromBitvavo({
+    market: 'BTC-EUR',
+    status: 'trading',
+    base: 'BTC',
+    quote: 'EUR',
+    minOrderInBaseAsset: '0.0001',
+    minOrderInQuoteAsset: '5',
+    quantityDecimals: '4',
+    tickSize: '0.01',
+    orderTypes: ['market', 'limit'],
+  }, 70_000);
+
+  assert.equal(result.symbol, 'BTC-EUR');
+  assert.equal(result.minBaseQty, 0.0001);
+  assert.equal(result.minQuoteNotional, 5);
+  assert.equal(result.stepSize, 0.0001);
+});
+
+test('Bitvavo parser rejects markets that are not in trading state', () => {
+  assert.throws(() => marketConstraintsFromBitvavo({
+    market: 'BTC-EUR',
+    status: 'halted',
+    minOrderInBaseAsset: '0.0001',
+    minOrderInQuoteAsset: '5',
+    quantityDecimals: '4',
+  }, 70_000));
+});
+
 test('venue parsers fail closed on malformed numeric constraints', () => {
   assert.throws(() => marketConstraintsFromBinance({
     symbol: 'BTCEUR',
@@ -55,5 +85,11 @@ test('venue parsers fail closed on malformed numeric constraints', () => {
   assert.throws(() => marketConstraintsFromKraken({
     wsname: 'XBT/EUR',
     ordermin: 'bad',
+  }, 70_000));
+
+  assert.throws(() => marketConstraintsFromBitvavo({
+    market: 'BTC-EUR',
+    status: 'trading',
+    minOrderInBaseAsset: 'bad',
   }, 70_000));
 });
