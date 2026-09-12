@@ -36,38 +36,77 @@ function validateBook(book: OrderBookSnapshot): void {
   }
 }
 
-function quoteVwap(levels: BookLevel[], quoteTarget: number): { vwap: number; filledQuote: number; fullyFillable: boolean } {
+function buyByQuote(levels: BookLevel[], quoteTarget: number): {
+  vwap: number;
+  filledQuote: number;
+  fullyFillable: boolean;
+} {
   if (!Number.isFinite(quoteTarget) || quoteTarget <= 0) {
     throw new Error('quote target must be finite and > 0');
   }
-  let remaining = quoteTarget;
+  let remainingQuote = quoteTarget;
   let spentQuote = 0;
   let acquiredBase = 0;
 
   for (const level of levels) {
-    if (remaining <= 1e-12) break;
+    if (remainingQuote <= 1e-12) break;
     const levelQuoteCapacity = level.price * level.baseQty;
-    const takeQuote = Math.min(remaining, levelQuoteCapacity);
+    const takeQuote = Math.min(remainingQuote, levelQuoteCapacity);
     const takeBase = takeQuote / level.price;
     spentQuote += takeQuote;
     acquiredBase += takeBase;
-    remaining -= takeQuote;
+    remainingQuote -= takeQuote;
   }
 
   const vwap = acquiredBase > 0 ? spentQuote / acquiredBase : 0;
-  if (!Number.isFinite(vwap) || !Number.isFinite(spentQuote) || !Number.isFinite(remaining)) {
-    throw new Error('derived order-book economics are not finite');
+  if (!Number.isFinite(vwap) || !Number.isFinite(spentQuote) || !Number.isFinite(remainingQuote)) {
+    throw new Error('derived buy-side economics are not finite');
   }
 
   return {
     vwap,
     filledQuote: spentQuote,
-    fullyFillable: remaining <= 1e-9,
+    fullyFillable: remainingQuote <= 1e-9,
+  };
+}
+
+function sellByBase(levels: BookLevel[], baseTarget: number): {
+  vwap: number;
+  filledQuote: number;
+  fullyFillable: boolean;
+} {
+  if (!Number.isFinite(baseTarget) || baseTarget <= 0) {
+    throw new Error('base target must be finite and > 0');
+  }
+  let remainingBase = baseTarget;
+  let soldBase = 0;
+  let receivedQuote = 0;
+
+  for (const level of levels) {
+    if (remainingBase <= 1e-12) break;
+    const takeBase = Math.min(remainingBase, level.baseQty);
+    soldBase += takeBase;
+    receivedQuote += takeBase * level.price;
+    remainingBase -= takeBase;
+  }
+
+  const vwap = soldBase > 0 ? receivedQuote / soldBase : 0;
+  if (!Number.isFinite(vwap) || !Number.isFinite(receivedQuote) || !Number.isFinite(remainingBase)) {
+    throw new Error('derived sell-side economics are not finite');
+  }
+
+  return {
+    vwap,
+    filledQuote: receivedQuote,
+    fullyFillable: remainingBase <= 1e-12,
   };
 }
 
 /**
  * Read-only microstructure analysis for a quote-currency ticket size.
+ * Buy-side analysis spends the quote ticket. Sell-side analysis fixes the base
+ * quantity equivalent to that ticket at best bid, so worse depth lowers actual
+ * proceeds instead of silently selling more base to preserve quote proceeds.
  * No networking and no order placement. Callers must supply a fresh book.
  */
 export function evaluateOrderBookEconomics(
@@ -91,8 +130,9 @@ export function evaluateOrderBookEconomics(
     throw new Error('invalid derived spread');
   }
 
-  const buy = quoteVwap(asks, quoteTicket);
-  const sell = quoteVwap(bids, quoteTicket);
+  const buy = buyByQuote(asks, quoteTicket);
+  const sellBaseTarget = quoteTicket / bestBid;
+  const sell = sellByBase(bids, sellBaseTarget);
   const buySlippageBps = buy.vwap > 0 ? ((buy.vwap - bestAsk) / bestAsk) * 10_000 : Infinity;
   const sellSlippageBps = sell.vwap > 0 ? ((bestBid - sell.vwap) / bestBid) * 10_000 : Infinity;
 
