@@ -18,17 +18,21 @@ Kraken human-readable minimum documentation has shown conflicting BTC examples, 
 
 ## 2. Public research surface
 
-The anchored-reversion evidence analyzer and the fail-closed Bitvavo local-book synchronizer are re-exported through `src/p300/index.ts`.
+The fail-closed Bitvavo local-book synchronizer is re-exported through `src/p300/index.ts`.
 
 A first public-reference collector helper was deliberately removed after adversarial review found that it treated Bitvavo `book.timestamp` as the timestamp of the book change. Bitvavo documents that field on the book subscription as the nanosecond timestamp of the **last transaction event**, which is not equivalent to the arrival/matching-engine time of every order-book change.
 
-Therefore a future collector must keep separate clocks:
-- precision-safe exchange timestamps as provenance where their semantics are known;
-- local wall-clock receive time for cross-feed age checks;
-- a local monotonic receive clock for ordering/latency measurements;
-- no inference that `book.timestamp` timestamps cancellations, placements or every BBO change.
+The current `anchored-reversion-evidence.ts` helper predates the stricter clock decision and uses wall-clock receive timestamps for cross-feed age/skew checks. It may remain useful for fixtures/general research, but it is **not Phase-A-valid timing evidence** and must not be used to claim lead/lag, causal ordering or economically timed reversion until a monotonic receive-time implementation replaces that path and is covered by tests.
 
-Until this is implemented and tested, Bitvavo book events may support sequence-correct book state but must **not** be used to claim exchange-time lead/lag or reversion timing from `book.timestamp`.
+Future Phase-A collection must keep three concepts separate:
+- precision-safe exchange/event timestamps as provenance only where their semantics are explicitly documented;
+- local wall-clock receive timestamps for human-readable audit/log correlation only;
+- a same-process local **monotonic receive clock** for ordering, freshness, age and cross-feed skew;
+- no inference that Bitvavo `book.timestamp` timestamps cancellations, placements or every BBO change.
+
+Bitvavo's public `ticker` channel is useful for target BBO changes because it emits whenever best bid/ask changes, but it does not provide an exchange event timestamp. That is acceptable: the Phase-A timing model must stamp receipt locally with the monotonic process clock rather than invent an exchange timestamp.
+
+Until monotonic timing is implemented and tested, Bitvavo sequence-correct book state may support depth/queue research but must **not** be used to make cross-feed timing claims.
 
 Some older research/helper modules may still be intentionally imported directly rather than surfaced through the barrel. That is not a LIVE blocker by itself. Any module required by a future integration path must be explicitly exported and covered by integration tests before promotion.
 
@@ -51,9 +55,10 @@ Still pending before any LIVE consideration:
 
 ## 4. Microstructure and Economics evidence still missing
 
-The code can normalize Bitvavo/Kraken/OKX public books, compute spread/VWAP/slippage, separate partial fills from fillable slippage distributions, validate comparable evidence sets, build an anchored cross-venue observation and maintain a sequence-checked Bitvavo local book.
+The code can normalize Bitvavo/Kraken/OKX public books, compute spread/VWAP/slippage, separate partial fills from fillable slippage distributions, validate comparable evidence sets, maintain a sequence-checked Bitvavo local book and infer conservative PAPER maker fills from queue/trade evidence.
 
 What is still missing is representative real evidence. A venue/pair cannot pass Economics Gate until we have:
+- monotonic-clock-valid target/reference alignment;
 - spread distribution rather than a single snapshot;
 - fillable slippage distributions by ticket size and side;
 - insufficient-depth/capture-error rates;
