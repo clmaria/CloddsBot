@@ -57,8 +57,10 @@ export interface PhaseAPublicTransportConfig {
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
   dependencies?: Partial<PhaseAPublicTransportDependencies>;
-  onRawMarketData?: (event: PhaseAPublicRawMarketData) => void;
-  onRuntimeEvent?: (event: PhaseAKeylessRuntimeCoreEvent) => void;
+  /** Must complete successfully before the corresponding payload may be parsed. */
+  onRawMarketData?: (event: PhaseAPublicRawMarketData) => void | Promise<void>;
+  /** Runtime evidence consumers may also fail closed asynchronously. */
+  onRuntimeEvent?: (event: PhaseAKeylessRuntimeCoreEvent) => void | Promise<void>;
   onTransportEvent?: (event: PhaseAPublicTransportEvent) => void;
 }
 
@@ -108,31 +110,19 @@ function defaultDependencies(): PhaseAPublicTransportDependencies {
 /**
  * Public, credential-free transport for Phase A research.
  *
- * Security/causality properties:
- * - only public market-data endpoints are present in this module;
- * - every callback is stamped with the same-process monotonic clock before
- *   message decoding/parsing;
- * - raw evidence is emitted after text decoding but before market parsing;
- * - evidence-sink failure invalidates the session rather than allowing
- *   unaudited observations to continue;
- * - any venue disconnect, socket error or parser/runtime uncertainty
- *   invalidates the whole causal session;
- * - reconnect creates a fresh runtime session and never carries market state
- *   across generations;
- * - Bitvavo waits for a real book-stream update before requesting the REST
- *   snapshot, so the runtime can prove stream/snapshot overlap;
- * - the Bitvavo REST snapshot body stays raw text until the already-tested
- *   precision-preserving runtime parser receives it.
- *
- * This class exposes no API-key fields and no order/cancel/account methods.
+ * Every payload is stamped at callback entry, then globally serialized across
+ * venues. The raw evidence sink is awaited before parsing/runtime mutation, so
+ * durable-evidence failure cannot race ahead of a market observation. Old
+ * generation work is discarded after any session invalidation. No credential,
+ * account, order or cancel capability exists in this module.
  */
 export class PhaseAPublicMarketTransport {
   private readonly runtime: PhaseAKeylessRuntimeCore;
   private readonly deps: PhaseAPublicTransportDependencies;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
-  private readonly onRawMarketData?: (event: PhaseAPublicRawMarketData) => void;
-  private readonly onRuntimeEvent?: (event: PhaseAKeylessRuntimeCoreEvent) => void;
+  private readonly onRawMarketData?: (event: PhaseAPublicRawMarketData) => void | Promise<void>;
+  private readonly onRuntimeEvent?: (event: PhaseAKeylessRuntimeCoreEvent) => void | Promise<void>;
   private readonly onTransportEvent?: (event: PhaseAPublicTransportEvent) => void;
 
   private running = false;
@@ -142,9 +132,9 @@ export class PhaseAPublicMarketTransport {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private sockets = new Map<PhaseAPublicVenue, SocketSlot>();
   private openVenues = new Set<PhaseAPublicVenue>();
-  // Generation is part of the key because runtime request ids restart from 1
-  // after resetSession(). A late old fetch must not clear a new request's lock.
   private snapshotInFlight = new Set<string>();
+  /** One causal ingress queue for all venues and REST snapshot responses. */
+  private ingressTail: Promise<void> = Promise.resolve();
 
   constructor(config: PhaseAPublicTransportConfig) {
     const defaults = defaultDependencies();
@@ -184,7 +174,7 @@ export class PhaseAPublicMarketTransport {
   stop(): void {
     if (!this.running) return;
     this.running = false;
-    this.generation += 1; // stale callbacks from the old generation become inert immediately.
+    this.generation += 1;
     if (this.reconnectTimer !== undefined) {
       this.deps.clearTimeoutFn(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -196,11 +186,7 @@ export class PhaseAPublicMarketTransport {
 
   private connectGeneration(generation: number): void {
     if (!this.isCurrent(generation)) return;
-    this.onTransportEvent?.({
-      kind: 'session_started',
-      sessionId: this.runtime.sessionId,
-      generation,
-    });
+    this.onTransportEvent?.({ kind: 'session_started', sessionId: this.runtime.sessionId, generation });
 
     this.openVenue('bitvavo', PHASE_A_PUBLIC_ENDPOINTS.bitvavoWs, generation);
     if (!this.isCurrent(generation)) return;
@@ -235,9 +221,6 @@ export class PhaseAPublicMarketTransport {
               { name: 'book', markets: ['BTC-USDC'] },
             ],
           }));
-          // Do not fetch the REST snapshot yet. The first actual `book` update
-          // is buffered by the runtime and then emits bitvavo_snapshot_request.
-          // This proves overlap between the live stream and REST snapshot.
         } else if (venue === 'kraken') {
           socket.send(JSON.stringify({
             method: 'subscribe',
@@ -249,7 +232,6 @@ export class PhaseAPublicMarketTransport {
             },
           }));
         }
-        // Binance uses a raw public bookTicker stream encoded in the URL.
       } catch (error) {
         this.rejectAndRestart(venue, error, generation);
       }
@@ -257,20 +239,26 @@ export class PhaseAPublicMarketTransport {
 
     socket.on('message', (data) => {
       if (!this.isCurrent(generation)) return;
-      // Capture causality before decoding, parsing or any other work.
-      const stamp = this.captureStamp();
+      let stamp: PhaseAReceiveStamp;
       try {
+        // Causality is captured before decoding, disk I/O, parsing or runtime work.
+        stamp = this.captureStamp();
+      } catch (error) {
+        this.rejectAndRestart(venue, error, generation);
+        return;
+      }
+
+      void this.enqueueIngress(venue, generation, async () => {
         const raw = asMessageText(data);
-        this.emitRaw({ source: venue, channel: 'websocket', rawPayload: raw, stamp });
+        await this.emitRaw({ source: venue, channel: 'websocket', rawPayload: raw, stamp });
+        if (!this.isCurrent(generation)) return;
         const events = venue === 'bitvavo'
           ? this.runtime.ingestBitvavoRaw(raw, stamp)
           : venue === 'kraken'
             ? this.runtime.ingestKrakenRaw(raw, stamp)
             : this.runtime.ingestBinanceRaw(raw, stamp);
-        this.handleRuntimeEvents(events, generation);
-      } catch (error) {
-        this.rejectAndRestart(venue, error, generation);
-      }
+        await this.handleRuntimeEvents(events, generation);
+      });
     });
 
     socket.on('error', (error) => {
@@ -284,7 +272,7 @@ export class PhaseAPublicMarketTransport {
     });
 
     socket.on('pong', () => {
-      // Deliberately no state mutation: pong is transport health, not market evidence.
+      // Transport health only; not market evidence.
     });
   }
 
@@ -296,8 +284,8 @@ export class PhaseAPublicMarketTransport {
     return { receivedMonoNs: mono.toString(), receivedAtMs: wall };
   }
 
-  private emitRaw(event: PhaseAPublicRawMarketData): void {
-    this.onRawMarketData?.({
+  private async emitRaw(event: PhaseAPublicRawMarketData): Promise<void> {
+    await this.onRawMarketData?.({
       source: event.source,
       channel: event.channel,
       rawPayload: event.rawPayload,
@@ -305,10 +293,14 @@ export class PhaseAPublicMarketTransport {
     });
   }
 
-  private handleRuntimeEvents(events: readonly PhaseAKeylessRuntimeCoreEvent[], generation: number): void {
+  private async handleRuntimeEvents(
+    events: readonly PhaseAKeylessRuntimeCoreEvent[],
+    generation: number,
+  ): Promise<void> {
     if (!this.isCurrent(generation)) return;
     for (const event of events) {
-      this.onRuntimeEvent?.(event);
+      await this.onRuntimeEvent?.(event);
+      if (!this.isCurrent(generation)) return;
       if (event.kind === 'bitvavo_snapshot_request') {
         void this.fetchBitvavoSnapshot(event.requestId, generation);
       }
@@ -330,20 +322,48 @@ export class PhaseAPublicMarketTransport {
       if (!this.isCurrent(generation)) return;
       if (!rawSnapshot.trim()) throw new Error('Bitvavo public snapshot body is empty');
 
-      // Never JSON.parse the snapshot here: its timestamp can be a nanosecond
-      // integer that exceeds Number.MAX_SAFE_INTEGER. The runtime parser quotes
-      // protected integer fields before JSON.parse.
-      const stamp = this.captureStamp();
-      this.emitRaw({ source: 'bitvavo', channel: 'book_snapshot_rest', rawPayload: rawSnapshot, stamp });
-      const wrapped = `{"action":"getBook","requestId":${requestId},"response":${rawSnapshot}}`;
-      this.handleRuntimeEvents(this.runtime.ingestBitvavoRaw(wrapped, stamp), generation);
-    } catch (error) {
-      if (this.isCurrent(generation)) {
+      let stamp: PhaseAReceiveStamp;
+      try {
+        stamp = this.captureStamp();
+      } catch (error) {
         this.rejectAndRestart('bitvavo', error, generation);
+        return;
       }
+
+      await this.enqueueIngress('bitvavo', generation, async () => {
+        await this.emitRaw({ source: 'bitvavo', channel: 'book_snapshot_rest', rawPayload: rawSnapshot, stamp });
+        if (!this.isCurrent(generation)) return;
+        // Preserve precision-sensitive nanosecond literals until the runtime parser.
+        const wrapped = `{"action":"getBook","requestId":${requestId},"response":${rawSnapshot}}`;
+        await this.handleRuntimeEvents(this.runtime.ingestBitvavoRaw(wrapped, stamp), generation);
+      });
+    } catch (error) {
+      if (this.isCurrent(generation)) this.rejectAndRestart('bitvavo', error, generation);
     } finally {
       this.snapshotInFlight.delete(inFlightKey);
     }
+  }
+
+  /**
+   * Serialize all market ingress across venues. A slow durable evidence write
+   * delays parsing rather than allowing unaudited state to overtake it.
+   */
+  private enqueueIngress(
+    venue: PhaseAPublicVenue,
+    generation: number,
+    operation: () => void | Promise<void>,
+  ): Promise<void> {
+    const scheduled = this.ingressTail.then(async () => {
+      if (!this.isCurrent(generation)) return;
+      try {
+        await operation();
+      } catch (error) {
+        if (this.isCurrent(generation)) this.rejectAndRestart(venue, error, generation);
+      }
+    });
+    // Keep the queue reusable even if an unexpected implementation error leaks.
+    this.ingressTail = scheduled.catch(() => undefined);
+    return scheduled;
   }
 
   private rejectAndRestart(venue: PhaseAPublicVenue, error: unknown, generation: number): void {
@@ -355,8 +375,6 @@ export class PhaseAPublicMarketTransport {
   private invalidateAndReconnect(reason: string, failedGeneration: number): void {
     if (!this.running || failedGeneration !== this.generation) return;
 
-    // Invalidate old callbacks before closing sockets, because close handlers may
-    // fire synchronously in tests or immediately in some implementations.
     this.generation += 1;
     const nextGeneration = this.generation;
     this.snapshotInFlight.clear();
