@@ -53,19 +53,22 @@ test('automatic degradation rejects corrupted or expanding numeric authority', (
   }));
 });
 
-test('fast gate rejects negative/non-finite order and exposure inputs', () => {
+test('fast gate rejects negative/non-finite current and projected state', () => {
   const profile = {
     strategyId: 's1', authorized: true, authorizedCapital: 25,
     maxGrossExposure: 15, maxConcurrentSlots: 3, tradingState: 'ACTIVE' as const,
   };
   const base = {
-    strategyId: 's1', requestedNotional: 5, currentGrossExposure: 5,
-    currentOpenSlots: 1, isOpeningExposure: true,
+    strategyId: 's1', requestedNotional: 5,
+    currentGrossExposure: 5, projectedGrossExposure: 10,
+    currentOpenSlots: 1, projectedOpenSlots: 2,
   };
   assert.equal(evaluateFastGate(profile, { ...base, requestedNotional: -5 }).allowed, false);
   assert.equal(evaluateFastGate(profile, { ...base, requestedNotional: Number.NaN }).allowed, false);
   assert.equal(evaluateFastGate(profile, { ...base, currentGrossExposure: Number.NaN }).allowed, false);
+  assert.equal(evaluateFastGate(profile, { ...base, projectedGrossExposure: Number.POSITIVE_INFINITY }).allowed, false);
   assert.equal(evaluateFastGate(profile, { ...base, currentOpenSlots: -1 }).allowed, false);
+  assert.equal(evaluateFastGate(profile, { ...base, projectedOpenSlots: -1 }).allowed, false);
 });
 
 test('market constraints and reducibility reject invalid numeric market data', () => {
