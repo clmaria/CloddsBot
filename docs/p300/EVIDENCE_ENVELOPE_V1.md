@@ -7,156 +7,157 @@ Purpose: define the minimum immutable evidence needed to reproduce, falsify and 
 ## Storage principle
 
 For the small Phase A sample, prefer append-only files over a database:
-
-- raw market-data events: newline-delimited JSON (NDJSON), partitioned by source/session/day;
+- raw market-data events: NDJSON, partitioned by source/session/day;
 - one immutable episode envelope JSON per episode/control;
 - one manifest containing file hashes, collector/config version and cohort identity.
 
-Do not add a database, queue or dashboard unless the evidence volume proves that flat append-only storage is insufficient. Phase A is an experiment, not a platform.
+Do not add a database, queue or dashboard unless evidence volume proves flat append-only storage insufficient. Phase A is an experiment, not a platform.
 
 ## Envelope identity
 
 Every envelope must include:
-
-- `schemaVersion`: fixed to `p300.phase-a.envelope.v1`;
-- `cohortId`: identifies the frozen source/methodology cohort;
-- `episodeId`: stable unique ID;
+- `schemaVersion`: `p300.phase-a.envelope.v1`;
+- `cohortId`;
+- `episodeId`;
 - `kind`: `underpriced_episode`, `overpriced_control`, `background_control`, or `invalid_episode`;
-- `collectorVersion` / source commit SHA;
-- `configHash`: hash of the exact preregistered thresholds/horizons/data-quality limits;
-- `createdAtUtc`;
+- collector/source commit SHA;
+- `configHash` of the frozen Phase-A configuration;
+- `createdAtUtc` for human audit;
 - `contentHash`: canonical SHA-256 of the finalized envelope excluding the hash field itself.
 
-An envelope is never updated in place after finalization. Corrections create a superseding envelope that names the superseded `episodeId` and reason.
+An envelope is never updated in place after finalization. Corrections create a superseding envelope naming the superseded `episodeId` and reason.
 
 ## Clock fields
 
 Never collapse distinct clocks into one generic timestamp.
 
-For every source observation record:
+For every received source event record:
+- `receivedWallMs`: local wall-clock receive time for human-readable audit/log correlation only;
+- `receivedMonoNs`: same-process monotonic receive time, stored as a precision-safe decimal string;
+- `exchangeEventTime`: optional and only populated where the venue documents its semantics for that event type;
+- `exchangeEventTimeSemantics`: explicit label such as `trade_execution`, `server_event`, `last_transaction`, or `not_available`.
 
-- `receivedWallMs`: local UTC wall-clock receive time;
-- `receivedMonoNs`: local monotonic receive time, stored as a decimal string/bigint-safe value;
-- `exchangeEventTime`: optional and only populated when the venue documents its semantics for that event type;
-- `exchangeEventTimeSemantics`: explicit label, for example `trade_execution`, `book_update`, `server_event`, or `not_available`.
+**Phase-A ordering, freshness, age, cross-feed skew and active-window boundaries use `receivedMonoNs` only.** Wall time must not drive causal ordering because NTP/system adjustments may move it. Exchange time is provenance/diagnostic unless a later protocol explicitly establishes a valid shared-clock mapping.
 
-Cross-feed actionable ordering and skew use `receivedMonoNs`. Wall time supports audit/reconciliation. Exchange time is provenance/diagnostic unless the protocol explicitly allows it.
+All timing-compared events in one episode must belong to the same collector process / monotonic clock domain. A collector restart invalidates any open episode.
 
-Bitvavo `book.timestamp` must not be labeled `book_update`; current documentation describes it as the timestamp of the last transaction event.
+Bitvavo `book.timestamp` must not be labeled `book_update`; current documentation describes it as the timestamp of the last transaction event. Bitvavo `trade.timestampNs` may be stored as trade-execution provenance, but it must not be compared directly with locally observed signal activation for Phase-A fill timing.
 
 ## Target state
 
 Store the synchronized Bitvavo BTC-USDC state used at the actionable observation:
-
 - market status evidence;
 - book `nonce`;
-- BBO ticker values and local receive clocks;
-- local-book BBO and local receive clocks;
+- BBO ticker values + `receivedWallMs` + `receivedMonoNs`;
+- local-book BBO + its latest relevant receive clocks;
 - whether ticker and synchronized book agree;
-- actionable observation clock = later monotonic receive instant of the agreeing target state;
-- top-N or ticket-sufficient book depth used for economics;
+- actionable observation `receivedMonoNs` = later monotonic receive instant of the agreeing target state;
+- top-N or ticket-sufficient depth used for economics;
 - spread, midpoint, fixed-ticket VWAP/slippage;
 - imbalance value and depth definition;
-- dynamic market metadata relevant to executability: base minimum, quote minimum, quantity precision, tick size, market status and metadata-observed time.
+- dynamic executability metadata: base minimum, quote minimum, quantity precision, tick size, market status and metadata-observed time.
 
 If ticker/book agreement is not reached inside the frozen sync-quality rule, the candidate is invalid rather than backdated.
 
 ## Reference state
 
-For the primary direct-USDC cohort, store independently for each frozen reference venue:
+The primary Phase-A direct-USDC cohort uses:
+- Kraken Spot `BTC/USDC`;
+- Binance Spot `BTCUSDC` as public reference data only.
 
-- venue and exact market (`BTC-USDC`/`BTCUSDC`);
+Store independently for each reference:
+- venue and exact market;
 - BBO used;
 - midpoint used;
-- local receive clocks;
+- `receivedWallMs` for audit;
+- `receivedMonoNs` for timing;
 - optional documented exchange event time + semantics;
 - feed/channel identifier;
-- freshness at actionable target time.
+- monotonic freshness at actionable target time.
 
 Also store:
-
 - reference-composite method/version;
 - reference price;
 - cross-reference dispersion in bps;
-- cross-feed receive skew;
+- cross-feed monotonic receive skew;
 - all quality-gate PASS/FAIL flags.
+
+Coinbase may appear as an auxiliary USD diagnostic source but is not counted as an independent primary direct-USDC component because its public `-USDC` channels can alias the corresponding `-USD` data.
 
 Do not replace a missing primary reference with another venue inside the same cohort. A different source set means a different `cohortId`.
 
 ## Dislocation state
 
 Store:
-
 - signed target/reference deviation in bps;
 - absolute deviation in bps;
 - preregistered deviation bin;
 - `direction`: underpriced / overpriced / flat;
 - whether the observation belongs to the currently executable long-only side;
-- trigger/rearm state used by the episode detector once that rule is finalized.
+- trigger/rearm state used by the episode detector once frozen.
 
 No field named `predictedEdge` is allowed in Phase A. The experiment measures behavior; it does not label a realized signal with an invented expected return.
 
 ## Raw-evidence pointers
 
 The envelope must point to immutable raw-event ranges rather than duplicating the complete stream:
-
 - source file/hash;
 - first and last record offsets or sequence IDs used;
 - target book snapshot reference;
 - Bitvavo book/ticker/trade event range;
-- Coinbase/Binance (or frozen fallback-cohort) reference event ranges.
+- Kraken BTC/USDC reference event range;
+- Binance BTCUSDC reference event range;
+- optional auxiliary diagnostic source ranges.
 
-The raw evidence must be sufficient to rebuild the target/reference observation without trusting derived fields in the envelope.
+Raw evidence must be sufficient to rebuild the observation without trusting derived fields in the envelope.
 
 ## Public-trade reconciliation
 
-For every episode that reports fill-dependent evidence, store:
-
-- Bitvavo WebSocket trade IDs captured in the active/reconciliation interval;
-- public REST trade-query interval;
-- REST trade IDs returned;
+For any episode that eventually reports fill-dependent evidence, store:
+- Bitvavo WebSocket trade IDs captured in the relevant interval;
+- public REST reconciliation interval/query semantics;
+- REST trade IDs returned where unambiguous reconciliation is possible;
 - missing-in-WebSocket IDs;
 - unexpected/duplicate IDs;
-- `tradeStreamIntegrityVerified` boolean;
+- `tradeStreamIntegrityVerified`;
 - reconciliation timestamp and raw response hash.
 
-If reconciliation fails, maker-fill results for that episode are invalid. Non-fill-dependent market/reversion measurements may remain usable if their own integrity gates pass.
+If reconciliation/integrity cannot be established, fill-dependent evidence is invalid. Non-fill-dependent market/reversion measurements may remain usable if their own gates pass.
 
-## PAPER maker-fill evidence
+## PAPER maker-fill evidence — currently gated
 
-Store separate evidence tiers; never collapse them into one result.
+The current queue helper is useful fixture/research logic but **must not yet produce Phase-A fill probability** because its active window is in Bitvavo exchange-trade time while signal activation is observed locally.
+
+Before any fill evidence is promoted, activation, expiry and every captured trade arrival must be represented in the same-process `receivedMonoNs` domain (or another explicitly validated conservative clock mapping must be preregistered).
+
+After that gate is resolved, preserve two separate evidence tiers:
 
 ### Tier A — strict trade-through
-
-For each preregistered active quote window:
 - hypothetical side/price/quantity;
-- activation clock and expiry clock;
+- activation and expiry `receivedMonoNs`;
 - whether post-only would have rejected at activation;
-- whether a correctly sided reconciled trade executed through the hypothetical limit before expiry;
-- first strict-fill evidence time.
+- whether a correctly sided, integrity-valid trade received while active executed through the hypothetical limit;
+- first strict-fill evidence receive time.
 
 ### Tier B — visible-queue model
-
 Additionally store:
 - visible queue ahead at activation;
-- reconciled correctly sided volume at the exact price while active;
+- correctly sided public traded volume at the exact price while active;
 - queue remaining;
 - inferred filled quantity/status under the conservative queue model;
-- first/complete inferred fill times.
+- first/complete inferred fill receive times.
 
-Cancellations never reduce queue-ahead in Tier B.
+Cancellations never reduce queue-ahead in Tier B. If Tier A and Tier B disagree, preserve the disagreement. Tier B success may not be presented as Tier A evidence.
 
-If Tier A and Tier B disagree, preserve the disagreement. Tier B success may not be presented as Tier A evidence.
+Until the monotonic fill-timing refactor is implemented and tested, these fields remain `not_evaluated_clock_gate` rather than false/zero.
 
 ## Forward outcomes
 
-At every preregistered horizon, store:
-
+At every preregistered horizon measured from actionable `receivedMonoNs`, store:
 - horizon label;
-- target BBO/mid known at the observation point;
-- reference components and composite known at that point;
-- signed deviation;
-- absolute deviation;
+- target BBO/mid known at that point;
+- Kraken/Binance direct-USDC reference components and composite known at that point;
+- signed/absolute deviation;
 - gross convergence from episode start;
 - target-only return;
 - reference return;
@@ -167,33 +168,31 @@ A missing/invalid horizon is stored as missing/invalid; never forward-fill it.
 
 ## Economics fields
 
-Phase A economics are descriptive and must separate measured from assumed values:
-
+Phase A economics are descriptive and separate measured from assumed values:
 - venue fee schedule identity/source date;
 - maker/taker fee assumptions applicable to the hypothetical path;
 - fee-only round-trip floor;
 - observed spread;
 - fixed-ticket slippage/depth metrics;
-- maker fill tier/window;
-- adverse-selection measurement after hypothetical fill;
-- infrastructure cost assumption (currently zero incremental paid infrastructure for Phase A);
+- maker-fill tier/window only after the fill clock gate is resolved;
+- adverse-selection measurement only after valid hypothetical fill evidence exists;
+- infrastructure cost assumption;
 - operational/admin cost fields, allowed to remain `unknown` rather than fabricated.
 
 Do not include tax as a synthetic per-trade fee. Tax/accounting remains a separate operational/after-tax layer.
 
 ## Quality and invalidation
 
-Every envelope contains an explicit list of quality checks, each with status and reason. At minimum:
-
+Every envelope contains explicit quality checks with status/reason. At minimum:
 - target book continuity;
 - target ticker/book agreement;
 - market status;
-- clock sanity;
+- monotonic clock-domain sanity;
 - source freshness;
 - reference dispersion;
-- cross-feed receive skew;
+- cross-feed monotonic receive skew;
 - raw payload parse validity;
-- trade reconciliation integrity when fill evidence is used;
+- trade integrity when fill evidence is used;
 - forward-horizon completeness.
 
 An invalid episode is stored rather than silently dropped, with the invalidation reason. It does not count toward the valid Phase A sample.
@@ -206,6 +205,6 @@ If the project ever reaches human-approved LIVE, real fills require a separate t
 
 ## Promotion rule
 
-A future collector implementation is acceptable only if tests demonstrate that an envelope can be rebuilt from recorded raw evidence and that malformed/stale/out-of-sequence inputs fail closed.
+A future collector implementation is acceptable only if tests demonstrate that an envelope can be rebuilt from raw evidence and that malformed, stale, out-of-sequence, mixed-clock-domain inputs fail closed.
 
 Completing this envelope contract does not make the strategy PAPER_READY or LIVE_READY; it only defines what evidence must exist before those decisions can be made.
