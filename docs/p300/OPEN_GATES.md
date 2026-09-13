@@ -16,19 +16,22 @@ Still open before a limit/market execution path can be considered complete:
 
 Kraken human-readable minimum documentation has shown conflicting BTC examples, so fresh exchange metadata remains authoritative.
 
-## 2. Public research surface
+## 2. Public research surface — P0 clock-contract refactor
 
 The fail-closed Bitvavo local-book synchronizer is re-exported through `src/p300/index.ts`.
 
 A first public-reference collector helper was deliberately removed after adversarial review found that it treated Bitvavo `book.timestamp` as the timestamp of the book change. Bitvavo documents that field on the book subscription as the nanosecond timestamp of the **last transaction event**, which is not equivalent to the arrival/matching-engine time of every order-book change.
 
-The current `anchored-reversion-evidence.ts` helper predates the stricter clock decision and uses wall-clock receive timestamps for cross-feed age/skew checks. It may remain useful for fixtures/general research, but it is **not Phase-A-valid timing evidence** and must not be used to claim lead/lag, causal ordering or economically timed reversion until a monotonic receive-time implementation replaces that path and is covered by tests.
+**P0 before Phase A collection:** `src/p300/anchored-reversion-evidence.ts` currently requires `SynchronizedTargetBook.exchangeObservedAtMs` and validates its freshness. That contract is semantically incompatible with Bitvavo standard book mutations because the standard feed does not provide a valid exchange timestamp for every book change. Do not fill this required field with local receive time under a misleading exchange-time name, and do not use Bitvavo `book.timestamp` as a substitute.
 
-Future Phase-A collection must keep three concepts separate:
-- precision-safe exchange/event timestamps as provenance only where their semantics are explicitly documented;
-- local wall-clock receive timestamps for human-readable audit/log correlation only;
-- a same-process local **monotonic receive clock** for ordering, freshness, age and cross-feed skew;
-- no inference that Bitvavo `book.timestamp` timestamps cancellations, placements or every BBO change.
+The required refactor is:
+- make exchange event time optional provenance, with explicit semantics;
+- require local wall-clock receive time for audit/log correlation;
+- require a same-process local **monotonic receive clock** for ordering, freshness, age and cross-feed skew;
+- make Phase-A timing gates depend on the monotonic receive path, not exchange-time placeholders;
+- cover stale/future/skew/ordering behavior with tests before the analyzer is promoted for Bitvavo Phase A.
+
+Until that refactor is implemented and tested, `anchored-reversion-evidence.ts` may remain useful for fixtures/general research but is **not Phase-A-valid timing evidence** and must not be used to claim lead/lag, causal ordering or economically timed reversion.
 
 Bitvavo's public `ticker` channel is useful for target BBO changes because it emits whenever best bid/ask changes, but it does not provide an exchange event timestamp. That is acceptable: the Phase-A timing model must stamp receipt locally with the monotonic process clock rather than invent an exchange timestamp.
 
