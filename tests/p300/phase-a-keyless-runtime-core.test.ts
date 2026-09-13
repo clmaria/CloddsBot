@@ -149,19 +149,19 @@ test('aligned book-only refresh can feed horizon state without becoming a new si
   assert.ok(event.snapshotResult);
 });
 
-test('nonce gap invalidates target book and requests a fresh snapshot', () => {
+test('nonce gap invalidates target book and requests a fresh snapshot without forging a target state', () => {
   const core = runtime();
   core.ensureBitvavoSnapshotRequest();
   core.ingestBitvavoRaw(bitvavoSnapshot(1, 11), stamp());
   core.ingestBitvavoRaw(bitvavoTicker(), stamp());
 
   const events = core.ingestBitvavoRaw(bitvavoUpdate(13), stamp());
+  assert.equal(events.length, 2);
   assert.equal(events[0].kind, 'bitvavo_book_invalidated');
   assert.equal(events[1].kind, 'bitvavo_snapshot_request');
-  assert.equal(events[2].kind, 'target_state');
-  if (events[2].kind === 'target_state') assert.equal(events[2].alignment.status, 'missing');
   assert.equal(core.bitvavoSynchronized, false);
   assert.equal(core.bufferedBitvavoUpdates, 1);
+  assert.equal(core.currentTargetAlignment.status, 'missing');
 
   const request = events[1];
   if (request.kind !== 'bitvavo_snapshot_request') return;
@@ -174,7 +174,9 @@ test('stale snapshot response cannot replace a newer pending synchronization att
   const core = runtime();
   const [initial] = core.ensureBitvavoSnapshotRequest();
   assert.equal(initial.kind, 'bitvavo_snapshot_request');
-  core.invalidateBitvavo('test resync', stamp());
+  const invalidated = core.invalidateBitvavo('test resync', stamp());
+  assert.equal(invalidated[0].kind, 'bitvavo_book_invalidated');
+  assert.equal(invalidated[1].kind, 'bitvavo_snapshot_request');
   const pending = core.ensureBitvavoSnapshotRequest();
   assert.deepEqual(pending, []);
 
