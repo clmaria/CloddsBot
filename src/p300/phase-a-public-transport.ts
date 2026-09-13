@@ -15,6 +15,14 @@ export const PHASE_A_PUBLIC_ENDPOINTS = Object.freeze({
 });
 
 export type PhaseAPublicVenue = 'bitvavo' | 'kraken' | 'binance';
+export type PhaseAPublicRawChannel = 'websocket' | 'book_snapshot_rest';
+
+export interface PhaseAPublicRawMarketData {
+  source: PhaseAPublicVenue;
+  channel: PhaseAPublicRawChannel;
+  rawPayload: string;
+  stamp: PhaseAReceiveStamp;
+}
 
 export interface PhaseAWebSocketLike {
   readonly readyState: number;
@@ -49,6 +57,7 @@ export interface PhaseAPublicTransportConfig {
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
   dependencies?: Partial<PhaseAPublicTransportDependencies>;
+  onRawMarketData?: (event: PhaseAPublicRawMarketData) => void;
   onRuntimeEvent?: (event: PhaseAKeylessRuntimeCoreEvent) => void;
   onTransportEvent?: (event: PhaseAPublicTransportEvent) => void;
 }
@@ -103,6 +112,9 @@ function defaultDependencies(): PhaseAPublicTransportDependencies {
  * - only public market-data endpoints are present in this module;
  * - every callback is stamped with the same-process monotonic clock before
  *   message decoding/parsing;
+ * - raw evidence is emitted after text decoding but before market parsing;
+ * - evidence-sink failure invalidates the session rather than allowing
+ *   unaudited observations to continue;
  * - any venue disconnect, socket error or parser/runtime uncertainty
  *   invalidates the whole causal session;
  * - reconnect creates a fresh runtime session and never carries market state
@@ -119,6 +131,7 @@ export class PhaseAPublicMarketTransport {
   private readonly deps: PhaseAPublicTransportDependencies;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly onRawMarketData?: (event: PhaseAPublicRawMarketData) => void;
   private readonly onRuntimeEvent?: (event: PhaseAKeylessRuntimeCoreEvent) => void;
   private readonly onTransportEvent?: (event: PhaseAPublicTransportEvent) => void;
 
@@ -144,6 +157,7 @@ export class PhaseAPublicMarketTransport {
       throw new Error('reconnectBaseMs must not exceed reconnectMaxMs');
     }
     this.deps = { ...defaults, ...config.dependencies };
+    this.onRawMarketData = config.onRawMarketData;
     this.onRuntimeEvent = config.onRuntimeEvent;
     this.onTransportEvent = config.onTransportEvent;
   }
@@ -247,6 +261,7 @@ export class PhaseAPublicMarketTransport {
       const stamp = this.captureStamp();
       try {
         const raw = asMessageText(data);
+        this.emitRaw({ source: venue, channel: 'websocket', rawPayload: raw, stamp });
         const events = venue === 'bitvavo'
           ? this.runtime.ingestBitvavoRaw(raw, stamp)
           : venue === 'kraken'
@@ -281,6 +296,15 @@ export class PhaseAPublicMarketTransport {
     return { receivedMonoNs: mono.toString(), receivedAtMs: wall };
   }
 
+  private emitRaw(event: PhaseAPublicRawMarketData): void {
+    this.onRawMarketData?.({
+      source: event.source,
+      channel: event.channel,
+      rawPayload: event.rawPayload,
+      stamp: { ...event.stamp },
+    });
+  }
+
   private handleRuntimeEvents(events: readonly PhaseAKeylessRuntimeCoreEvent[], generation: number): void {
     if (!this.isCurrent(generation)) return;
     for (const event of events) {
@@ -309,8 +333,9 @@ export class PhaseAPublicMarketTransport {
       // Never JSON.parse the snapshot here: its timestamp can be a nanosecond
       // integer that exceeds Number.MAX_SAFE_INTEGER. The runtime parser quotes
       // protected integer fields before JSON.parse.
-      const wrapped = `{"action":"getBook","requestId":${requestId},"response":${rawSnapshot}}`;
       const stamp = this.captureStamp();
+      this.emitRaw({ source: 'bitvavo', channel: 'book_snapshot_rest', rawPayload: rawSnapshot, stamp });
+      const wrapped = `{"action":"getBook","requestId":${requestId},"response":${rawSnapshot}}`;
       this.handleRuntimeEvents(this.runtime.ingestBitvavoRaw(wrapped, stamp), generation);
     } catch (error) {
       if (this.isCurrent(generation)) {
