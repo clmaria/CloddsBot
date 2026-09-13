@@ -1,6 +1,6 @@
-import {
-  CausalMarketBuffer,
-  type CausalSnapshotFailure,
+import type {
+  CausalAsOfSnapshot,
+  CausalSnapshotFailure,
 } from './causal-market-buffer';
 import {
   PHASE_A_HORIZON_SECONDS,
@@ -9,6 +9,18 @@ import {
 
 export type PhaseAHorizonSeconds = (typeof PHASE_A_HORIZON_SECONDS)[number];
 export type PhaseAHorizonKey = `${PhaseAHorizonSeconds}s`;
+
+/**
+ * Minimal read contract for the owner of Phase-A causal market state.
+ * CausalMarketBuffer and PhaseACollectorCore both satisfy this structurally,
+ * but production composition should pass the collector that already owns
+ * ingestion rather than construct a parallel buffer.
+ */
+export interface PhaseAHorizonSnapshotSource {
+  readonly sessionId: string;
+  readonly ingestSeq: number;
+  snapshotAsOf(cutoffMonoNs: string, nowMonoNs: string): CausalAsOfSnapshot;
+}
 
 interface PhaseAHorizonOutcomeBase {
   episodeId: string;
@@ -87,21 +99,21 @@ function bpsReturn(current: number, start: number): number {
 }
 
 /**
- * Records preregistered Phase-A outcomes from the existing CausalMarketBuffer.
+ * Records preregistered Phase-A outcomes from the existing causal-state owner.
  * It owns no market-data state and cannot backfill from exchange or wall time.
  */
 export class PhaseAHorizonOutcomeRecorder {
-  private readonly buffer: CausalMarketBuffer;
+  private readonly source: PhaseAHorizonSnapshotSource;
   private readonly episodeValue: PhaseAEpisode;
   private readonly outcomesByHorizon = new Map<PhaseAHorizonSeconds, PhaseAHorizonOutcome>();
   private lastSealMonoNs?: bigint;
 
-  constructor(buffer: CausalMarketBuffer, episode: PhaseAEpisode) {
+  constructor(source: PhaseAHorizonSnapshotSource, episode: PhaseAEpisode) {
     validateEpisode(episode);
-    if (buffer.sessionId !== episode.sessionId) {
-      throw new Error('horizon recorder buffer belongs to a different clock session');
+    if (source.sessionId !== episode.sessionId) {
+      throw new Error('horizon recorder causal source belongs to a different clock session');
     }
-    this.buffer = buffer;
+    this.source = source;
     this.episodeValue = episode;
   }
 
@@ -123,7 +135,7 @@ export class PhaseAHorizonOutcomeRecorder {
 
   /** Seal every unresolved horizon whose preregistered monotonic deadline has passed. */
   recordDue(nowMonoNs: string): PhaseAHorizonOutcome[] {
-    if (this.buffer.sessionId !== this.episodeValue.sessionId) {
+    if (this.source.sessionId !== this.episodeValue.sessionId) {
       throw new Error('horizon recorder clock session is no longer valid');
     }
     const now = parseMonoNs(nowMonoNs, 'horizon recorder nowMonoNs');
@@ -151,13 +163,13 @@ export class PhaseAHorizonOutcomeRecorder {
     dueMonoNs: string,
     nowMonoNs: string,
   ): PhaseAHorizonOutcome {
-    let asOf;
+    let asOf: CausalAsOfSnapshot;
     try {
-      asOf = this.buffer.snapshotAsOf(dueMonoNs, nowMonoNs);
+      asOf = this.source.snapshotAsOf(dueMonoNs, nowMonoNs);
     } catch (error) {
       if (error instanceof Error && /no target state exists/.test(error.message)) {
         return Object.freeze({
-          ...this.base(seconds, dueMonoNs, nowMonoNs, this.buffer.ingestSeq),
+          ...this.base(seconds, dueMonoNs, nowMonoNs, this.source.ingestSeq),
           status: 'unavailable' as const,
           reason: 'NO_TARGET_STATE_AT_OR_BEFORE_HORIZON' as const,
         });
