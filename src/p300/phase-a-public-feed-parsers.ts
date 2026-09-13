@@ -1,10 +1,7 @@
 import type { CausalMarketEventInput } from './causal-market-buffer';
-import {
-  bitvavoStateToOrderBook,
-  bitvavoTimestampNsToMs,
-  type BitvavoBookUpdateLike,
-  type BitvavoLocalBookState,
-  type BitvavoSnapshotLike,
+import type {
+  BitvavoBookUpdateLike,
+  BitvavoSnapshotLike,
 } from './bitvavo-book-sync';
 
 export interface PhaseAReceiveStamp {
@@ -150,6 +147,10 @@ export function parseKrakenTickerV2Raw(
  * Parse only the public Bitvavo messages needed to maintain the Phase A local
  * BTC-USDC book. Nanosecond timestamp literals are converted to strings before
  * JSON.parse so the existing book-sync layer receives precision-safe values.
+ *
+ * This parser deliberately does not create a causal target. A Bitvavo target
+ * becomes actionable only after PhaseATargetCoordinator proves that the
+ * synchronized book and public ticker agree on price and displayed size.
  */
 export function parseBitvavoBookRaw(
   raw: string,
@@ -206,32 +207,4 @@ export function parseBitvavoBookRaw(
   }
 
   return null;
-}
-
-/** Convert a validated/synchronized Bitvavo local book into the target event. */
-export function bitvavoLocalBookToCausalInput(
-  state: BitvavoLocalBookState,
-  stampInput: PhaseAReceiveStamp,
-): CausalMarketEventInput {
-  const stamp = validateStamp(stampInput);
-  const book = bitvavoStateToOrderBook(state);
-  const bid = book.bids[0]?.price;
-  const ask = book.asks[0]?.price;
-  if (!(Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0)) {
-    throw new Error('Bitvavo synchronized book has no valid top of book');
-  }
-  validateTopOfBook(bid, ask, 'Bitvavo');
-
-  return {
-    venue: 'bitvavo',
-    symbol: state.market,
-    bid,
-    ask,
-    receivedMonoNs: stamp.receivedMonoNs,
-    receivedAtMs: stamp.receivedAtMs,
-    sourceObservedAtMs: state.exchangeTimestampNs
-      ? bitvavoTimestampNsToMs(state.exchangeTimestampNs)
-      : undefined,
-    sourceSequence: state.nonce,
-  };
 }
