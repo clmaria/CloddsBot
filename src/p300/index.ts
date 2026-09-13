@@ -15,3 +15,4 @@ export * from './phase-a-public-feed-parsers';
 export * from './phase-a-bitvavo-ticker';
 export * from './phase-a-target-coordinator';
 export * from './phase-a-collector-core';
+export * from './phase-a-episode-detector';
