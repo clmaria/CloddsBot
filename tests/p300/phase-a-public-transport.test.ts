@@ -26,17 +26,9 @@ class FakeSocket implements PhaseAWebSocketLike {
     return this;
   }
 
-  send(data: string): void {
-    this.sent.push(data);
-  }
-
-  close(): void {
-    this.readyState = 3;
-    this.emit('close');
-  }
-
+  send(data: string): void { this.sent.push(data); }
+  close(): void { this.readyState = 3; this.emit('close'); }
   ping(): void {}
-
   emit(event: string, ...args: unknown[]): void {
     for (const listener of this.listeners.get(event) ?? []) listener(...args);
   }
@@ -102,8 +94,8 @@ function buildHarness(snapshot = snapshotBody()) {
       },
       clearTimeoutFn: () => {},
     },
-    onRuntimeEvent: (event) => runtimeEvents.push(event.kind),
-    onTransportEvent: (event) => transportEvents.push(event),
+    onRuntimeEvent: (event) => { runtimeEvents.push(event.kind); },
+    onTransportEvent: (event) => { transportEvents.push(event); },
   });
 
   return {
@@ -124,8 +116,10 @@ function openAll(harness: ReturnType<typeof buildHarness>): void {
   harness.sockets.get(PHASE_A_PUBLIC_ENDPOINTS.binanceWs)?.emit('open');
 }
 
-async function flushAsync(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+async function flushAsync(rounds = 6): Promise<void> {
+  for (let i = 0; i < rounds; i += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 test('uses only public endpoints and waits for live Bitvavo book overlap before snapshot', async () => {
@@ -170,7 +164,7 @@ test('uses only public endpoints and waits for live Bitvavo book overlap before 
   h.transport.stop();
 });
 
-test('captures the monotonic receive stamp before decoding a websocket message', () => {
+test('captures the monotonic receive stamp before decoding a websocket message', async () => {
   const h = buildHarness();
   h.transport.start();
   const binance = h.sockets.get(PHASE_A_PUBLIC_ENDPOINTS.binanceWs);
@@ -184,6 +178,7 @@ test('captures the monotonic receive stamp before decoding a websocket message',
     },
   };
   binance.emit('message', message);
+  await flushAsync();
   assert.ok(h.runtimeEvents.includes('reference'));
   h.transport.stop();
 });
@@ -212,13 +207,14 @@ test('any venue close resets the full causal session and stale socket callbacks 
   h.transport.stop();
 });
 
-test('malformed public data fails closed and schedules a fresh causal session', () => {
+test('malformed public data fails closed and schedules a fresh causal session', async () => {
   const h = buildHarness();
   h.transport.start();
   const binance = h.sockets.get(PHASE_A_PUBLIC_ENDPOINTS.binanceWs);
   assert.ok(binance);
 
   binance.emit('message', '{bad-json');
+  await flushAsync();
   assert.equal(h.core.sessionId, 'transport-session-2');
   assert.equal(h.timers.length, 1);
   assert.ok(h.transportEvents.some((event) => event.kind === 'message_rejected' && event.venue === 'binance'));
