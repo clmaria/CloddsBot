@@ -25,9 +25,25 @@ test('safe mode requires successful recovery', () => {
 });
 
 test('hourly entry throttle blocks excess openings', () => {
-  const now = Date.now();
+  const now = 10_000;
   let state = createSupervisorState();
   state = recordEntry(state, config, now - 1000);
   state = recordEntry(state, config, now);
   assert.equal(canOpenNewExposure(state, config, now).allowed, false);
+});
+
+test('hourly entry throttle prunes entries only after a monotonic hour', () => {
+  let state = createSupervisorState();
+  state = recordEntry(state, config, 1_000);
+  state = recordEntry(state, config, 2_000);
+  assert.equal(canOpenNewExposure(state, config, 3_601_001).allowed, true);
+});
+
+test('supervisor fails closed when monotonic time moves backwards or clock domains are mixed', () => {
+  let state = createSupervisorState();
+  state = recordEntry(state, config, 5_000);
+  assert.throws(
+    () => canOpenNewExposure(state, config, 4_999),
+    /clock moved backwards|clock domains/,
+  );
 });
