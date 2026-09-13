@@ -114,6 +114,42 @@ function validateEpisode(episode: PhaseAEpisode): void {
   }
 }
 
+function validateAlignmentTiming(alignment: PhaseATargetAlignmentState, observedAt: bigint): void {
+  if (alignment.status === 'missing') {
+    if (alignment.observedThroughMonoNs !== undefined) {
+      const through = parseMonoNs(alignment.observedThroughMonoNs, 'alignment observedThroughMonoNs');
+      if (through !== observedAt) {
+        throw new Error('missing alignment cannot be re-stamped at a later monotonic time');
+      }
+    }
+    return;
+  }
+
+  const through = parseMonoNs(alignment.observedThroughMonoNs, 'alignment observedThroughMonoNs');
+  if (through !== observedAt) {
+    throw new Error(`${alignment.status} alignment cannot be re-stamped at a later monotonic time`);
+  }
+
+  if (alignment.status === 'mismatched') {
+    const book = parseMonoNs(alignment.bookReceivedMonoNs, 'mismatched bookReceivedMonoNs');
+    const ticker = parseMonoNs(alignment.tickerReceivedMonoNs, 'mismatched tickerReceivedMonoNs');
+    if (book > observedAt || ticker > observedAt) throw new Error('mismatched alignment contains future component evidence');
+    const expectedThrough = book > ticker ? book : ticker;
+    if (expectedThrough !== through) throw new Error('mismatched alignment observedThroughMonoNs is inconsistent with its components');
+    return;
+  }
+
+  const actionable = alignment.actionable;
+  const book = parseMonoNs(actionable.bookReceivedMonoNs, 'aligned bookReceivedMonoNs');
+  const ticker = parseMonoNs(actionable.tickerReceivedMonoNs, 'aligned tickerReceivedMonoNs');
+  const actionableAt = parseMonoNs(actionable.actionableReceivedMonoNs, 'aligned actionableReceivedMonoNs');
+  const expectedActionable = book > ticker ? book : ticker;
+  if (actionableAt !== expectedActionable) throw new Error('aligned actionable time is inconsistent with book/ticker receipt');
+  if (actionableAt !== observedAt || through !== actionableAt) {
+    throw new Error('aligned state cannot be re-stamped after its causal target became observable');
+  }
+}
+
 function validateAlignedSnapshot(
   episode: PhaseAEpisode,
   alignment: Extract<PhaseATargetAlignmentState, { status: 'aligned' }>,
@@ -192,22 +228,18 @@ export class PhaseAHorizonRecorder {
 
   observe(input: PhaseAHorizonAlignmentObservation): PhaseAHorizonRecord[] {
     if (this.invalidated) throw new Error('cannot observe a Phase-A episode after invalidation');
-    const observedAt = this.observeClock(input.observedMonoNs);
+    const observedAt = this.checkClock(input.observedMonoNs);
     const start = parseMonoNs(this.episodeValue.startMonoNs, 'episode startMonoNs');
     if (observedAt < start) throw new Error('horizon state cannot predate the episode start');
 
-    const stateObservedThrough = input.alignment.observedThroughMonoNs;
-    if (stateObservedThrough !== undefined) {
-      const through = parseMonoNs(stateObservedThrough, 'alignment observedThroughMonoNs');
-      if (through > observedAt) throw new Error('alignment state cannot contain future evidence');
-    }
-
+    validateAlignmentTiming(input.alignment, observedAt);
     if (input.alignment.status === 'aligned') {
       validateAlignedSnapshot(this.episodeValue, input.alignment, input.snapshotResult);
     } else if (input.snapshotResult !== undefined) {
       throw new Error('non-aligned horizon state cannot carry a causal snapshot result');
     }
 
+    this.commitClock(observedAt);
     const created: PhaseAHorizonRecord[] = [];
     for (const seconds of PHASE_A_HORIZON_SECONDS) {
       if (this.recordsByHorizon.has(seconds)) continue;
@@ -231,7 +263,8 @@ export class PhaseAHorizonRecorder {
    */
   advanceClock(nowMonoNs: string): PhaseAHorizonRecord[] {
     if (this.invalidated) return [];
-    const now = this.observeClock(nowMonoNs);
+    const now = this.checkClock(nowMonoNs);
+    this.commitClock(now);
     const created: PhaseAHorizonRecord[] = [];
     for (const seconds of PHASE_A_HORIZON_SECONDS) {
       if (this.recordsByHorizon.has(seconds)) continue;
@@ -248,8 +281,12 @@ export class PhaseAHorizonRecorder {
   /** Invalidate all unresolved horizons; they can never be repaired retrospectively. */
   invalidate(atMonoNs: string, reasonInput: string): PhaseAHorizonRecord[] {
     if (this.invalidated) return [];
-    const at = this.observeClock(atMonoNs);
     const reason = normalizeReason(reasonInput);
+    const at = this.checkClock(atMonoNs);
+    const start = parseMonoNs(this.episodeValue.startMonoNs, 'episode startMonoNs');
+    if (at < start) throw new Error('episode cannot be invalidated before its start');
+    this.commitClock(at);
+
     const created: PhaseAHorizonRecord[] = [];
     for (const seconds of PHASE_A_HORIZON_SECONDS) {
       if (this.recordsByHorizon.has(seconds)) continue;
@@ -271,13 +308,16 @@ export class PhaseAHorizonRecorder {
     return created;
   }
 
-  private observeClock(value: string): bigint {
+  private checkClock(value: string): bigint {
     const mono = parseMonoNs(value, 'horizon recorder monotonic time');
     if (this.lastClockNs !== undefined && mono < this.lastClockNs) {
       throw new Error('Phase-A horizon recorder monotonic clock regressed');
     }
-    this.lastClockNs = mono;
     return mono;
+  }
+
+  private commitClock(mono: bigint): void {
+    this.lastClockNs = mono;
   }
 
   private dueNs(seconds: PhaseAHorizonSeconds): bigint {
