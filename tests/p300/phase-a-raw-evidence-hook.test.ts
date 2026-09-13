@@ -45,6 +45,10 @@ function runtime(): PhaseAKeylessRuntimeCore {
   });
 }
 
+function firstBitvavoBookUpdate(): string {
+  return '{"event":"book","market":"BTC-USDC","nonce":0,"bids":[],"asks":[],"timestamp":1752139200123456700}';
+}
+
 function harness(snapshotBody = '{"market":"BTC-USDC","nonce":1,"bids":[["99","1"]],"asks":[["100","1"]],"timestamp":1752139200123456789}') {
   const sockets = new Map<string, Socket>();
   const raw: PhaseAPublicRawMarketData[] = [];
@@ -110,7 +114,7 @@ test('malformed websocket payload is preserved before the session fails closed',
   h.transport.stop();
 });
 
-test('Bitvavo REST snapshot raw evidence is stored unwrapped before precision-preserving parsing', async () => {
+test('Bitvavo REST raw evidence is emitted only after proven live-book overlap and preserves ns literal', async () => {
   const snapshot = '{"market":"BTC-USDC","nonce":1,"bids":[["99","1"]],"asks":[["100","1"]],"timestamp":1752139200123456789}';
   const h = harness(snapshot);
   h.transport.start();
@@ -119,10 +123,17 @@ test('Bitvavo REST snapshot raw evidence is stored unwrapped before precision-pr
   bitvavo.emit('open');
   await flushAsync();
 
+  assert.equal(h.raw.some((event) => event.channel === 'book_snapshot_rest'), false);
+  assert.equal(h.core.bitvavoSynchronized, false);
+
+  bitvavo.emit('message', firstBitvavoBookUpdate());
+  await flushAsync();
+
   const rest = h.raw.find((event) => event.channel === 'book_snapshot_rest');
   assert.ok(rest);
   assert.equal(rest.source, 'bitvavo');
   assert.equal(rest.rawPayload, snapshot);
+  assert.ok(rest.rawPayload.includes('1752139200123456789'));
   assert.doesNotMatch(rest.rawPayload, /requestId/);
   assert.equal(h.core.bitvavoSynchronized, true);
   h.transport.stop();
