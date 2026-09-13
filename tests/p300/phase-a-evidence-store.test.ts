@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -111,6 +111,18 @@ test('raw evidence is appended with exact byte and record cursors', async () => 
   });
 });
 
+test('concurrent raw appends are serialized into non-overlapping cursors', async () => {
+  await withTempStore(async (_root, store) => {
+    const [first, second] = await Promise.all([
+      store.appendRawEvent(rawInput('1000000000', '{"b":"1"}')),
+      store.appendRawEvent(rawInput('1000000001', '{"b":"2"}')),
+    ]);
+    assert.equal(first.range.startRecord, 1);
+    assert.equal(second.range.startRecord, 2);
+    assert.equal(first.range.endByte, second.range.startByte);
+  });
+});
+
 test('envelopes are immutable, cohort-bound, and content-addressed', async () => {
   await withTempStore(async (root, store) => {
     const envelope = finalizePhaseAEvidenceEnvelope({
@@ -139,6 +151,28 @@ test('envelopes are immutable, cohort-bound, and content-addressed', async () =>
       body: { startMonoNs: '1000000000', status: 'screening' },
     });
     await assert.rejects(() => store.writeEnvelope(wrongCohort), /cohortId does not match/);
+  });
+});
+
+test('finalization rejects raw-file tampering instead of blessing altered evidence', async () => {
+  await withTempStore(async (root, store) => {
+    const stored = await store.appendRawEvent(rawInput('1000000000', '{"b":"1"}'));
+    await writeFile(join(root, 'cohort-001', stored.range.file), 'tampered\n', 'utf8');
+    await assert.rejects(
+      () => store.finalize('2026-09-13T11:00:00.000Z'),
+      /append-only Phase-A evidence file changed/,
+    );
+  });
+});
+
+test('finalization rejects unexpected files injected into the cohort', async () => {
+  await withTempStore(async (root, store) => {
+    await store.appendRawEvent(rawInput('1000000000', '{"b":"1"}'));
+    await writeFile(join(root, 'cohort-001', 'injected.txt'), 'not evidence', 'utf8');
+    await assert.rejects(
+      () => store.finalize('2026-09-13T11:00:00.000Z'),
+      /unexpected file appeared/,
+    );
   });
 });
 
