@@ -1,0 +1,20 @@
+name: P300 Governance CI
+
+on:
+  push:
+    branches: [p300-governance-v1]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: node --test --import tsx --import ./tests/helpers/test-setup.ts "tests/p300/**/*.test.ts"
