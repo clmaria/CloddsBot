@@ -17,6 +17,7 @@ test('canonical Phase-A JSON is key-order stable and rejects unsafe numeric repr
   assert.throws(() => canonicalPhaseAJson({ bad: Number.NaN }), /non-finite/);
   assert.throws(() => canonicalPhaseAJson({ bad: undefined }), /undefined/);
   assert.throws(() => canonicalPhaseAJson({ bad: 1n }), /decimal strings/);
+  assert.throws(() => canonicalPhaseAJson(new Array(1)), /sparse array hole/);
 });
 
 test('raw event records preserve exact payload and bind it to a SHA-256 digest', () => {
