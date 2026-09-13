@@ -130,8 +130,12 @@ test('envelopes are immutable, cohort-bound, and content-addressed', async () =>
     await assert.rejects(() => store.writeEnvelope(envelope), /EEXIST|file already exists/i);
 
     const wrongCohort = finalizePhaseAEvidenceEnvelope({
-      ...envelope,
       cohortId: 'cohort-999',
+      episodeId: 'episode-002',
+      kind: 'underpriced_episode',
+      collectorCommitSha: COMMIT_SHA,
+      configHash: hashPhaseAConfig(CONFIG),
+      createdAtUtc: '2026-09-13T10:01:00.000Z',
       body: { startMonoNs: '1000000000', status: 'screening' },
     });
     await assert.rejects(() => store.writeEnvelope(wrongCohort), /cohortId does not match/);
