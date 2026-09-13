@@ -13,8 +13,9 @@ export interface FastGateContext {
   strategyId: string;
   requestedNotional: number;
   currentGrossExposure: number;
+  projectedGrossExposure: number;
   currentOpenSlots: number;
-  isOpeningExposure: boolean;
+  projectedOpenSlots: number;
 }
 
 export interface FastGateDecision {
@@ -29,7 +30,11 @@ function validNonNegative(value: number): boolean {
 /**
  * Hot-path gate: deterministic, synchronous, no network and no LLM calls.
  * It consumes a precomputed authorization profile created by slow preflight.
- * Invalid runtime state fails closed instead of relying on JS comparison semantics.
+ *
+ * The caller must provide projected post-fill exposure/slots. The gate derives
+ * whether risk increases from state deltas rather than trusting a declarative
+ * `isOpeningExposure` boolean. This prevents a mislabeled order from bypassing
+ * REDUCING or profile limits.
  */
 export function evaluateFastGate(
   profile: FastGateProfile,
@@ -57,27 +62,38 @@ export function evaluateFastGate(
   if (!Number.isFinite(ctx.requestedNotional) || ctx.requestedNotional <= 0) {
     return { allowed: false, reason: 'requested notional must be finite and > 0' };
   }
-  if (!validNonNegative(ctx.currentGrossExposure)) {
-    return { allowed: false, reason: 'current gross exposure is invalid' };
+  if (!validNonNegative(ctx.currentGrossExposure) || !validNonNegative(ctx.projectedGrossExposure)) {
+    return { allowed: false, reason: 'current/projected gross exposure is invalid' };
   }
-  if (!Number.isInteger(ctx.currentOpenSlots) || ctx.currentOpenSlots < 0) {
-    return { allowed: false, reason: 'current open slots are invalid' };
+  if (!Number.isInteger(ctx.currentOpenSlots) || ctx.currentOpenSlots < 0 ||
+      !Number.isInteger(ctx.projectedOpenSlots) || ctx.projectedOpenSlots < 0) {
+    return { allowed: false, reason: 'current/projected open slots are invalid' };
   }
 
   if (profile.tradingState === 'HALTED') return { allowed: false, reason: 'P300 authority halted' };
 
-  if (profile.tradingState === 'REDUCING' && ctx.isOpeningExposure) {
-    return { allowed: false, reason: 'REDUCING permits only exposure-reducing orders' };
+  const exposureIncreases = ctx.projectedGrossExposure > ctx.currentGrossExposure + 1e-12;
+  const slotsIncrease = ctx.projectedOpenSlots > ctx.currentOpenSlots;
+  const exposureDecreases = ctx.projectedGrossExposure < ctx.currentGrossExposure - 1e-12;
+  const slotsDecrease = ctx.projectedOpenSlots < ctx.currentOpenSlots;
+  const riskIncreasing = exposureIncreases || slotsIncrease;
+  const strictlyReducing = !exposureIncreases && !slotsIncrease && (exposureDecreases || slotsDecrease);
+
+  if (profile.tradingState === 'REDUCING' && !strictlyReducing) {
+    return { allowed: false, reason: 'REDUCING requires projected exposure/slots to strictly decrease without increasing another dimension' };
   }
 
-  if (ctx.isOpeningExposure) {
-    if (ctx.currentOpenSlots + 1 > profile.maxConcurrentSlots) {
+  // Limits govern any risk-increasing transition. Risk-reducing transitions may
+  // be allowed even if the current state is already above a newly tightened
+  // limit, otherwise the gate could trap exposure outside the envelope.
+  if (riskIncreasing) {
+    if (ctx.projectedOpenSlots > profile.maxConcurrentSlots) {
       return { allowed: false, reason: 'P300 concurrent slot limit exceeded' };
     }
-    if (ctx.currentGrossExposure + ctx.requestedNotional > profile.maxGrossExposure + 1e-12) {
+    if (ctx.projectedGrossExposure > profile.maxGrossExposure + 1e-12) {
       return { allowed: false, reason: 'P300 gross exposure limit exceeded' };
     }
-    if (ctx.currentGrossExposure + ctx.requestedNotional > profile.authorizedCapital + 1e-12) {
+    if (ctx.projectedGrossExposure > profile.authorizedCapital + 1e-12) {
       return { allowed: false, reason: 'P300 authorized capital exceeded' };
     }
   }
