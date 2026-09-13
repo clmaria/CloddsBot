@@ -75,6 +75,7 @@ function eventMonoNs(event: PhaseAKeylessRuntimeCoreEvent): string | undefined {
 function evidenceKind(pending: PendingEpisode): PhaseAEvidenceKind {
   if (!pending.terminal) throw new Error('cannot classify a non-terminal episode');
   if (pending.terminal.status === 'invalidated') return 'invalid_episode';
+  if (pending.recorder.records.some((record) => record.status === 'invalidated')) return 'invalid_episode';
   if (pending.episode.startObservation.direction === 'underpriced') return 'underpriced_episode';
   if (pending.episode.startObservation.direction === 'overpriced') return 'overpriced_control';
   return 'background_control';
@@ -157,8 +158,8 @@ export class PhaseAEpisodeEvidenceOrchestrator {
         this.handleDetectorEvents(this.detector.advanceClock(event.observedMonoNs), output);
       }
     } else {
-      this.advanceRecorders(event.observedMonoNs, output);
-      this.handleDetectorEvents(this.detector.advanceClock(event.observedMonoNs), output);
+      this.advanceRecorders(mono, output);
+      this.handleDetectorEvents(this.detector.advanceClock(mono), output);
     }
 
     await this.flushFinalizable(output);
