@@ -121,11 +121,15 @@ export class PhaseAPublicMarketTransport {
   private readonly onTransportEvent?: (event: PhaseAPublicTransportEvent) => void;
 
   private running = false;
+  private startedOnce = false;
   private generation = 0;
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private sockets = new Map<PhaseAPublicVenue, SocketSlot>();
-  private snapshotInFlight = new Set<number>();
+  private openVenues = new Set<PhaseAPublicVenue>();
+  // Generation is part of the key because runtime request ids restart from 1
+  // after resetSession(). A late old fetch must not clear a new request's lock.
+  private snapshotInFlight = new Set<string>();
 
   constructor(config: PhaseAPublicTransportConfig) {
     const defaults = defaultDependencies();
@@ -152,7 +156,11 @@ export class PhaseAPublicMarketTransport {
 
   start(): void {
     if (this.running) return;
+    if (this.startedOnce) this.runtime.resetSession(this.freshSessionId());
+    this.startedOnce = true;
     this.running = true;
+    this.reconnectAttempts = 0;
+    this.openVenues.clear();
     this.generation += 1;
     this.connectGeneration(this.generation);
   }
@@ -166,11 +174,12 @@ export class PhaseAPublicMarketTransport {
       this.reconnectTimer = undefined;
     }
     this.snapshotInFlight.clear();
+    this.openVenues.clear();
     this.closeAllSockets();
   }
 
   private connectGeneration(generation: number): void {
-    if (!this.running || generation !== this.generation) return;
+    if (!this.isCurrent(generation)) return;
     this.onTransportEvent?.({
       kind: 'session_started',
       sessionId: this.runtime.sessionId,
@@ -178,11 +187,14 @@ export class PhaseAPublicMarketTransport {
     });
 
     this.openVenue('bitvavo', PHASE_A_PUBLIC_ENDPOINTS.bitvavoWs, generation);
+    if (!this.isCurrent(generation)) return;
     this.openVenue('kraken', PHASE_A_PUBLIC_ENDPOINTS.krakenWs, generation);
+    if (!this.isCurrent(generation)) return;
     this.openVenue('binance', PHASE_A_PUBLIC_ENDPOINTS.binanceWs, generation);
   }
 
   private openVenue(venue: PhaseAPublicVenue, url: string, generation: number): void {
+    if (!this.isCurrent(generation)) return;
     let socket: PhaseAWebSocketLike;
     try {
       socket = this.deps.webSocketFactory(url);
@@ -195,6 +207,8 @@ export class PhaseAPublicMarketTransport {
 
     socket.on('open', () => {
       if (!this.isCurrent(generation)) return;
+      this.openVenues.add(venue);
+      if (this.openVenues.size === 3) this.reconnectAttempts = 0;
       this.onTransportEvent?.({ kind: 'venue_open', venue, generation });
       try {
         if (venue === 'bitvavo') {
@@ -274,8 +288,9 @@ export class PhaseAPublicMarketTransport {
   }
 
   private async fetchBitvavoSnapshot(requestId: number, generation: number): Promise<void> {
-    if (!this.isCurrent(generation) || this.snapshotInFlight.has(requestId)) return;
-    this.snapshotInFlight.add(requestId);
+    const inFlightKey = `${generation}:${requestId}`;
+    if (!this.isCurrent(generation) || this.snapshotInFlight.has(inFlightKey)) return;
+    this.snapshotInFlight.add(inFlightKey);
     try {
       const response = await this.deps.fetchFn(PHASE_A_PUBLIC_ENDPOINTS.bitvavoBookRest, {
         method: 'GET',
@@ -298,7 +313,7 @@ export class PhaseAPublicMarketTransport {
         this.rejectAndRestart('bitvavo', error, generation);
       }
     } finally {
-      this.snapshotInFlight.delete(requestId);
+      this.snapshotInFlight.delete(inFlightKey);
     }
   }
 
@@ -316,13 +331,10 @@ export class PhaseAPublicMarketTransport {
     this.generation += 1;
     const nextGeneration = this.generation;
     this.snapshotInFlight.clear();
+    this.openVenues.clear();
     this.closeAllSockets();
 
-    const nextSessionId = this.deps.makeSessionId().trim();
-    if (!nextSessionId || nextSessionId === this.runtime.sessionId) {
-      throw new Error('session id factory must return a fresh non-empty id');
-    }
-    this.runtime.resetSession(nextSessionId);
+    this.runtime.resetSession(this.freshSessionId());
     this.onTransportEvent?.({ kind: 'session_invalidated', reason, generation: nextGeneration });
 
     const exponent = Math.min(this.reconnectAttempts, 20);
@@ -336,6 +348,14 @@ export class PhaseAPublicMarketTransport {
       if (!this.isCurrent(nextGeneration)) return;
       this.connectGeneration(nextGeneration);
     }, delayMs);
+  }
+
+  private freshSessionId(): string {
+    const nextSessionId = this.deps.makeSessionId().trim();
+    if (!nextSessionId || nextSessionId === this.runtime.sessionId) {
+      throw new Error('session id factory must return a fresh non-empty id');
+    }
+    return nextSessionId;
   }
 
   private closeAllSockets(): void {
