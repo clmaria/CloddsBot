@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBitvavoLocalBook } from '../../src/p300/bitvavo-book-sync';
+import * as publicFeedParsers from '../../src/p300/phase-a-public-feed-parsers';
 import {
-  bitvavoLocalBookToCausalInput,
   parseBinanceBookTickerRaw,
   parseBitvavoBookRaw,
   parseKrakenTickerV2Raw,
@@ -125,25 +124,8 @@ test('Bitvavo parser ignores subscription confirmations and rejects other market
   ), /unexpected Bitvavo market/);
 });
 
-test('synchronized Bitvavo local book bridges into causal target without losing provenance', () => {
-  const state = createBitvavoLocalBook({
-    market: 'BTC-USDC',
-    nonce: 500,
-    bids: [['78200.10', '0.2'], ['78199.00', '1']],
-    asks: [['78200.20', '0.3'], ['78201.00', '1']],
-    timestamp: '1752139200123456789',
-  });
-  const causal = bitvavoLocalBookToCausalInput(state, STAMP);
-  assert.deepEqual(causal, {
-    venue: 'bitvavo',
-    symbol: 'BTC-USDC',
-    bid: 78200.10,
-    ask: 78200.20,
-    receivedMonoNs: STAMP.receivedMonoNs,
-    receivedAtMs: STAMP.receivedAtMs,
-    sourceObservedAtMs: 1_752_139_200_123,
-    sourceSequence: 500,
-  });
+test('public feed parser surface cannot bypass ticker/book target coordination', () => {
+  assert.equal('bitvavoLocalBookToCausalInput' in publicFeedParsers, false);
 });
 
 test('receive stamp is validated independently from exchange timestamps', () => {
