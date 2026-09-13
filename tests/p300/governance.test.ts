@@ -44,10 +44,6 @@ test('quote minimum erodes reducibility when price falls', () => {
     venue: 'example', symbol: 'BTC/EUR', price: 70_000,
     minQuoteNotional: 5, stepSize: 0.000001,
   };
-  // 0.000145 BTC is deliberately chosen so that, after lot-step rounding,
-  // it contains two executable 0.000072 BTC slices at EUR 70k but only one
-  // executable 0.000143 BTC slice at EUR 35k. This validates quote-minimum
-  // erosion without relying on an impossible fractional lot.
   const qty = 0.000145;
   const now = calculateReducibility(qty, market);
   const stressed = calculateStressedReducibility(qty, market, 35_000);
@@ -143,17 +139,40 @@ test('slow preflight rejects maker/checker collision and attention gate expiry',
   assert.ok(profile.reasons.some(r => r.includes('maker and checker')));
 });
 
-test('fast gate is deterministic and REDUCING blocks new exposure only', () => {
+test('fast gate derives risk direction from projected state instead of trusting an opening flag', () => {
   const profile = {
     strategyId: 's1', authorized: true, authorizedCapital: 25,
     maxGrossExposure: 15, maxConcurrentSlots: 3, tradingState: 'REDUCING' as const,
   };
+
   assert.equal(evaluateFastGate(profile, {
-    strategyId: 's1', requestedNotional: 5, currentGrossExposure: 10,
-    currentOpenSlots: 2, isOpeningExposure: true,
+    strategyId: 's1', requestedNotional: 5,
+    currentGrossExposure: 10, projectedGrossExposure: 15,
+    currentOpenSlots: 2, projectedOpenSlots: 3,
   }).allowed, false);
+
   assert.equal(evaluateFastGate(profile, {
-    strategyId: 's1', requestedNotional: 5, currentGrossExposure: 10,
-    currentOpenSlots: 2, isOpeningExposure: false,
+    strategyId: 's1', requestedNotional: 5,
+    currentGrossExposure: 10, projectedGrossExposure: 5,
+    currentOpenSlots: 2, projectedOpenSlots: 2,
   }).allowed, true);
+
+  assert.equal(evaluateFastGate(profile, {
+    strategyId: 's1', requestedNotional: 5,
+    currentGrossExposure: 10, projectedGrossExposure: 10,
+    currentOpenSlots: 2, projectedOpenSlots: 2,
+  }).allowed, false);
+});
+
+test('REDUCING cannot lower exposure by increasing slot count', () => {
+  const profile = {
+    strategyId: 's1', authorized: true, authorizedCapital: 25,
+    maxGrossExposure: 15, maxConcurrentSlots: 3, tradingState: 'REDUCING' as const,
+  };
+  const result = evaluateFastGate(profile, {
+    strategyId: 's1', requestedNotional: 2,
+    currentGrossExposure: 10, projectedGrossExposure: 8,
+    currentOpenSlots: 2, projectedOpenSlots: 3,
+  });
+  assert.equal(result.allowed, false);
 });
