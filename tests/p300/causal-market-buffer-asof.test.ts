@@ -54,8 +54,9 @@ test('as-of horizon uses reference updates known after the last target but befor
   buffer.ingest(event(KRAKEN, 120n, 101, 103));
   buffer.ingest(event(BINANCE, 125n, 103, 105));
 
-  const horizon = buffer.snapshotAsOf('130');
+  const horizon = buffer.snapshotAsOf('130', '130');
   assert.equal(horizon.cutoffMonoNs, '130');
+  assert.equal(horizon.sealedAtMonoNs, '130');
   assert.equal(horizon.snapshot.ok, true);
   if (!horizon.snapshot.ok) return;
   assert.equal(horizon.snapshot.target.ingestSeq, target.ingestSeq);
@@ -72,7 +73,7 @@ test('as-of horizon excludes events received after the cutoff even when queried 
   buffer.ingest(event(BINANCE, 150n, 119, 121));
   buffer.ingest(event(TARGET, 150n, 119, 121));
 
-  const horizon = buffer.snapshotAsOf('120');
+  const horizon = buffer.snapshotAsOf('120', '150');
   assert.equal(horizon.snapshot.ok, true);
   if (!horizon.snapshot.ok) return;
   assert.equal(horizon.snapshot.target.receivedMonoNs, '110');
@@ -86,14 +87,14 @@ test('a sealed as-of result cannot be backfilled by a later equal-clock arrival'
   buffer.ingest(event(BINANCE, 100n, 99, 101));
   buffer.ingest(event(TARGET, 110n, 98, 100));
 
-  const sealed = buffer.snapshotAsOf('120');
+  const sealed = buffer.snapshotAsOf('120', '120');
   assert.equal(sealed.snapshot.ok, true);
   if (!sealed.snapshot.ok) return;
   const sealedReferenceSeqs = sealed.snapshot.references.map((reference) => reference.ingestSeq);
   const sealedBoundary = sealed.cutoffIngestSeq;
 
   buffer.ingest(event(KRAKEN, 120n, 109, 111));
-  const later = buffer.snapshotAsOf('120');
+  const later = buffer.snapshotAsOf('120', '120');
   assert.equal(later.snapshot.ok, true);
   if (!later.snapshot.ok) return;
 
@@ -107,7 +108,7 @@ test('as-of horizon fails closed when no target exists by the cutoff', () => {
   const buffer = new CausalMarketBuffer(config());
   buffer.ingest(event(KRAKEN, 100n, 99, 101));
   buffer.ingest(event(BINANCE, 100n, 99, 101));
-  assert.throws(() => buffer.snapshotAsOf('100'), /no target state exists/);
+  assert.throws(() => buffer.snapshotAsOf('100', '100'), /no target state exists/);
 });
 
 test('reference freshness is evaluated at the horizon cutoff, not the older target time', () => {
@@ -117,7 +118,7 @@ test('reference freshness is evaluated at the horizon cutoff, not the older targ
   const target = buffer.ingest(event(TARGET, 100n, 98, 100));
   assert.equal(buffer.snapshotForTarget(target).ok, true);
 
-  const horizon = buffer.snapshotAsOf('101');
+  const horizon = buffer.snapshotAsOf('101', '101');
   assert.equal(horizon.snapshot.ok, false);
   if (horizon.snapshot.ok) return;
   assert.equal(horizon.snapshot.failures.filter((failure) => failure.code === 'STALE_REFERENCE').length, 2);
@@ -129,6 +130,25 @@ test('wall and exchange timestamps remain provenance-only in as-of selection', (
   buffer.ingest(event(BINANCE, 100n, 99, 101, { receivedAtMs: -9e12, sourceObservedAtMs: -9e15 }));
   buffer.ingest(event(TARGET, 110n, 98, 100, { receivedAtMs: 1, sourceObservedAtMs: 1 }));
 
-  const horizon = buffer.snapshotAsOf('110');
+  const horizon = buffer.snapshotAsOf('110', '110');
   assert.equal(horizon.snapshot.ok, true);
+});
+
+test('as-of horizon cannot be sealed before its monotonic cutoff', () => {
+  const buffer = new CausalMarketBuffer(config());
+  buffer.ingest(event(KRAKEN, 100n, 99, 101));
+  buffer.ingest(event(BINANCE, 100n, 99, 101));
+  buffer.ingest(event(TARGET, 110n, 98, 100));
+
+  assert.throws(() => buffer.snapshotAsOf('120', '119'), /still in the future/);
+});
+
+test('as-of seal clock cannot regress behind an event already received', () => {
+  const buffer = new CausalMarketBuffer(config());
+  buffer.ingest(event(KRAKEN, 100n, 99, 101));
+  buffer.ingest(event(BINANCE, 100n, 99, 101));
+  buffer.ingest(event(TARGET, 110n, 98, 100));
+  buffer.ingest(event(KRAKEN, 130n, 101, 103));
+
+  assert.throws(() => buffer.snapshotAsOf('120', '125'), /precedes an event already received/);
 });
