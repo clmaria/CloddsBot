@@ -74,6 +74,25 @@ export function validateRiskEnvelope(envelope: RiskEnvelope): EnvelopeValidation
     reasons.push('gross exposure exceeds authorized capital');
   }
 
+  // P300 is a no-leverage Spot envelope. A loss/drawdown limit larger than all
+  // authorized capital cannot function as a protective bound and is internally
+  // inconsistent with the capital authority.
+  if (
+    Number.isFinite(envelope.maxDailyLoss) &&
+    Number.isFinite(envelope.authorizedCapital) &&
+    envelope.maxDailyLoss > envelope.authorizedCapital + 1e-12
+  ) {
+    reasons.push('max daily loss exceeds authorized capital');
+  }
+
+  if (
+    Number.isFinite(envelope.maxDrawdown) &&
+    Number.isFinite(envelope.authorizedCapital) &&
+    envelope.maxDrawdown > envelope.authorizedCapital + 1e-12
+  ) {
+    reasons.push('max drawdown exceeds authorized capital');
+  }
+
   if (
     Number.isFinite(envelope.maxRiskPerPosition) &&
     Number.isFinite(envelope.maxDailyLoss) &&
