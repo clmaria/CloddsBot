@@ -109,7 +109,7 @@ test('public ingress composes buffered Bitvavo sync, ticker agreement and the si
   assert.equal(ingress.bufferedBitvavoUpdateCount, 0);
 });
 
-test('sequence gap invalidates the local target state and forces a fresh overtaking snapshot', () => {
+test('sequence gap invalidates only the book and forces a fresh overtaking snapshot', () => {
   const ingress = new PhaseAPublicMarketIngress(collector(), { maxBufferedBitvavoUpdates: 10 });
 
   const initial = ingress.ingestBitvavoBookRaw(bitvavoSnapshotRaw(100), stamp(100));
@@ -138,16 +138,45 @@ test('sequence gap invalidates the local target state and forces a fresh overtak
   assert.equal(ingress.bufferedBitvavoUpdateCount, 0);
 });
 
-test('non-sequence book corruption invalidates state and surfaces the error', () => {
+test('transport reconnect clears stale Bitvavo ticker as well as local book state', () => {
+  const ingress = new PhaseAPublicMarketIngress(collector(), { maxBufferedBitvavoUpdates: 10 });
+
+  ingress.ingestBitvavoBookRaw(bitvavoSnapshotRaw(100), stamp(100));
+  const firstTicker = ingress.ingestBitvavoTickerRaw(bitvavoTickerRaw(100, 2, 101, 1), stamp(101));
+  assert.equal(firstTicker.kind, 'bitvavo_ticker');
+  if (firstTicker.kind === 'bitvavo_ticker') assert.ok(firstTicker.target);
+
+  ingress.invalidateBitvavoTransportState();
+  assert.equal(ingress.bitvavoBookSynchronized, false);
+
+  const reconnectedBook = ingress.ingestBitvavoBookRaw(bitvavoSnapshotRaw(200), stamp(102));
+  assert.equal(reconnectedBook.kind, 'bitvavo_book_ready');
+  if (reconnectedBook.kind === 'bitvavo_book_ready') {
+    assert.equal(reconnectedBook.target, undefined, 'pre-disconnect ticker must not survive reconnect');
+  }
+
+  const freshTicker = ingress.ingestBitvavoTickerRaw(bitvavoTickerRaw(100, 2, 101, 1), stamp(103));
+  assert.equal(freshTicker.kind, 'bitvavo_ticker');
+  if (freshTicker.kind === 'bitvavo_ticker') assert.ok(freshTicker.target);
+});
+
+test('non-sequence book corruption invalidates all Bitvavo inputs and surfaces the error', () => {
   const ingress = new PhaseAPublicMarketIngress(collector(), { maxBufferedBitvavoUpdates: 10 });
   ingress.ingestBitvavoBookRaw(bitvavoSnapshotRaw(100), stamp(100));
+  ingress.ingestBitvavoTickerRaw(bitvavoTickerRaw(100, 2, 101, 1), stamp(101));
 
   assert.throws(
-    () => ingress.ingestBitvavoBookRaw(bitvavoUpdateRaw(101, [['102', '1']]), stamp(101)),
+    () => ingress.ingestBitvavoBookRaw(bitvavoUpdateRaw(101, [['102', '1']]), stamp(102)),
     /crossed/,
   );
   assert.equal(ingress.bitvavoBookSynchronized, false);
   assert.equal(ingress.bufferedBitvavoUpdateCount, 0);
+
+  const bookAfterCorruption = ingress.ingestBitvavoBookRaw(bitvavoSnapshotRaw(200), stamp(103));
+  assert.equal(bookAfterCorruption.kind, 'bitvavo_book_ready');
+  if (bookAfterCorruption.kind === 'bitvavo_book_ready') {
+    assert.equal(bookAfterCorruption.target, undefined, 'ticker from before corrupt state must not survive');
+  }
 });
 
 test('pre-snapshot buffering is bounded and fails closed instead of growing without limit', () => {
