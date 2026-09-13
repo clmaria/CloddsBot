@@ -19,3 +19,4 @@ export * from './phase-a-episode-detector';
 export * from './phase-a-evidence-integrity';
 export * from './phase-a-horizon-recorder-v2';
 export * from './phase-a-episode-evidence';
+export * from './phase-a-raw-artifact';
