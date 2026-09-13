@@ -18,7 +18,17 @@ Kraken human-readable minimum documentation has shown conflicting BTC examples, 
 
 ## 2. Public research surface
 
-The anchored-reversion evidence analyzer and the fail-closed Bitvavo local-book synchronizer are now re-exported through `src/p300/index.ts`.
+The anchored-reversion evidence analyzer and the fail-closed Bitvavo local-book synchronizer are re-exported through `src/p300/index.ts`.
+
+A first public-reference collector helper was deliberately removed after adversarial review found that it treated Bitvavo `book.timestamp` as the timestamp of the book change. Bitvavo documents that field on the book subscription as the nanosecond timestamp of the **last transaction event**, which is not equivalent to the arrival/matching-engine time of every order-book change.
+
+Therefore a future collector must keep separate clocks:
+- precision-safe exchange timestamps as provenance where their semantics are known;
+- local wall-clock receive time for cross-feed age checks;
+- a local monotonic receive clock for ordering/latency measurements;
+- no inference that `book.timestamp` timestamps cancellations, placements or every BBO change.
+
+Until this is implemented and tested, Bitvavo book events may support sequence-correct book state but must **not** be used to claim exchange-time lead/lag or reversion timing from `book.timestamp`.
 
 Some older research/helper modules may still be intentionally imported directly rather than surfaced through the barrel. That is not a LIVE blocker by itself. Any module required by a future integration path must be explicitly exported and covered by integration tests before promotion.
 
@@ -41,7 +51,7 @@ Still pending before any LIVE consideration:
 
 ## 4. Microstructure and Economics evidence still missing
 
-The code can now normalize Bitvavo/Kraken/OKX public books, compute spread/VWAP/slippage, separate partial fills from fillable slippage distributions, validate comparable evidence sets, build an anchored cross-venue observation and maintain a sequence-checked Bitvavo local book.
+The code can normalize Bitvavo/Kraken/OKX public books, compute spread/VWAP/slippage, separate partial fills from fillable slippage distributions, validate comparable evidence sets, build an anchored cross-venue observation and maintain a sequence-checked Bitvavo local book.
 
 What is still missing is representative real evidence. A venue/pair cannot pass Economics Gate until we have:
 - spread distribution rather than a single snapshot;
