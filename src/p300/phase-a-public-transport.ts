@@ -107,6 +107,8 @@ function defaultDependencies(): PhaseAPublicTransportDependencies {
  *   invalidates the whole causal session;
  * - reconnect creates a fresh runtime session and never carries market state
  *   across generations;
+ * - Bitvavo waits for a real book-stream update before requesting the REST
+ *   snapshot, so the runtime can prove stream/snapshot overlap;
  * - the Bitvavo REST snapshot body stays raw text until the already-tested
  *   precision-preserving runtime parser receives it.
  *
@@ -219,7 +221,9 @@ export class PhaseAPublicMarketTransport {
               { name: 'book', markets: ['BTC-USDC'] },
             ],
           }));
-          this.handleRuntimeEvents(this.runtime.ensureBitvavoSnapshotRequest(), generation);
+          // Do not fetch the REST snapshot yet. The first actual `book` update
+          // is buffered by the runtime and then emits bitvavo_snapshot_request.
+          // This proves overlap between the live stream and REST snapshot.
         } else if (venue === 'kraken') {
           socket.send(JSON.stringify({
             method: 'subscribe',
