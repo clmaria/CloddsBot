@@ -26,46 +26,56 @@ A first public-reference collector helper was deliberately removed after adversa
 
 The required refactor is:
 - make exchange event time optional provenance, with explicit semantics;
-- require local wall-clock receive time for audit/log correlation;
-- require a same-process local **monotonic receive clock** for ordering, freshness, age and cross-feed skew;
-- make Phase-A timing gates depend on the monotonic receive path, not exchange-time placeholders;
-- cover stale/future/skew/ordering behavior with tests before the analyzer is promoted for Bitvavo Phase A.
+- retain local wall-clock receive time for human-readable audit/log correlation only;
+- require a same-process local **monotonic receive clock** for ordering, freshness, age, active windows and cross-feed skew;
+- make Phase-A timing gates depend on the monotonic receive path, not exchange-time or wall-clock placeholders;
+- cover stale/future/skew/ordering and process-clock-domain behavior with tests before the analyzer is promoted for Bitvavo Phase A.
 
 Until that refactor is implemented and tested, `anchored-reversion-evidence.ts` may remain useful for fixtures/general research but is **not Phase-A-valid timing evidence** and must not be used to claim lead/lag, causal ordering or economically timed reversion.
 
 Bitvavo's public `ticker` channel is useful for target BBO changes because it emits whenever best bid/ask changes, but it does not provide an exchange event timestamp. That is acceptable: the Phase-A timing model must stamp receipt locally with the monotonic process clock rather than invent an exchange timestamp.
 
-Until monotonic timing is implemented and tested, Bitvavo sequence-correct book state may support depth/queue research but must **not** be used to make cross-feed timing claims.
+The current primary direct-USDC reference design is:
+- target: Bitvavo BTC-USDC;
+- reference A: Kraken Spot BTC/USDC;
+- reference B: Binance Spot BTCUSDC, public-data/reference only.
 
-Some older research/helper modules may still be intentionally imported directly rather than surfaced through the barrel. That is not a LIVE blocker by itself. Any module required by a future integration path must be explicitly exported and covered by integration tests before promotion.
+Coinbase is not counted as an independent direct-USDC reference in the primary cohort because its current public Advanced Trade documentation aliases most `-USDC` subscriptions to the corresponding `-USD` market data.
+
+Until monotonic timing is implemented and tested, Bitvavo sequence-correct book state may support depth/queue research but must **not** be used to make cross-feed timing claims.
 
 ## 3. Remaining Risk Envelope hardening
 
 Resolved in the current branch:
 - all critical capital/risk numeric inputs reject NaN/Infinity;
 - gross exposure <= authorized capital;
+- max daily loss <= authorized capital for the no-leverage Spot envelope;
+- max drawdown <= authorized capital for the no-leverage Spot envelope;
 - slots × max risk per position <= daily loss;
-- slot capacity can represent declared gross exposure;
+- slot capacity can represent declared max gross exposure;
 - max drawdown >= max daily loss;
 - max risk per position <= max position notional;
 - stressed exit-slice requirements are checked in strategy preflight;
-- corrupted automatic-degradation inputs fail closed.
+- corrupted automatic-degradation inputs fail closed;
+- fast-path risk direction is derived from current/projected post-fill exposure/slots rather than a caller-supplied opening/reducing boolean.
 
 Still pending before any LIVE consideration:
-- explicit max-drawdown coherence with authorized capital for spot/no-leverage mode;
 - correlation/aggregate-loss assumptions when concurrent slots are not independent;
-- portfolio-level interaction of several individually valid envelopes.
+- portfolio-level interaction of several individually valid envelopes;
+- execution-adapter proof that its projected exposure/slot calculation matches Clodds/venue semantics before the fast gate consumes it.
 
 ## 4. Microstructure and Economics evidence still missing
 
-The code can normalize Bitvavo/Kraken/OKX public books, compute spread/VWAP/slippage, separate partial fills from fillable slippage distributions, validate comparable evidence sets, maintain a sequence-checked Bitvavo local book and infer conservative PAPER maker fills from queue/trade evidence.
+The code can normalize Bitvavo/Kraken/OKX public books, compute spread/VWAP/slippage, separate partial fills from fillable slippage distributions, validate comparable evidence sets and maintain a sequence-checked Bitvavo local book.
+
+The conservative maker-fill helper implements useful price-time/visible-queue logic for fixtures, but its current active-window timestamps are in the Bitvavo exchange-trade timestamp domain while signal activation is observed locally. It is therefore **not Phase-A-valid fill-probability evidence yet**. Promotion requires same-process monotonic receive timestamps for activation and trade arrivals, or another explicitly validated conservative clock/latency mapping.
 
 What is still missing is representative real evidence. A venue/pair cannot pass Economics Gate until we have:
 - monotonic-clock-valid target/reference alignment;
 - spread distribution rather than a single snapshot;
 - fillable slippage distributions by ticket size and side;
 - insufficient-depth/capture-error rates;
-- conservative maker fill probability / non-fill opportunity cost;
+- conservative maker fill probability / non-fill opportunity cost after the timing refactor;
 - adverse selection after a hypothetical fill;
 - same-horizon benchmark;
 - API/infrastructure allocation;
@@ -100,7 +110,15 @@ Therefore P300 currently has **no execution adapter that is both Spot-suitable a
 
 Do not build an execution adapter until the venue has passed regulatory, technical, risk, economics and reporting gates. Adapter work consumes the Attention Budget.
 
-## 7. Bitvavo algorithmic-trading operational gate
+## 7. Runtime authorization / supervisor integration remains incomplete
+
+The authorization fingerprint utility is now strict about non-finite, undefined, circular and non-plain values, but it is **not yet wired into native Clodds runtime/execution**. Its existence does not prove an order is bound to a specific approved preflight profile.
+
+The fingerprint binds an exact authorization snapshot, including freshness/version context such as `generatedAt`. If semantic policy identity is later needed across fresh preflights, use a separate policy hash rather than weakening the exact authorization fingerprint.
+
+The P300 supervisor now uses process-local monotonic time by default for its hourly entry throttle and fails closed when supplied timestamps move backwards / mix clock domains. Those monotonic throttle timestamps must not be persisted across process restarts as if they were epoch time.
+
+## 8. Bitvavo algorithmic-trading operational gate
 
 Bitvavo's current Trading Rules state that participants engaging in algorithmic trading must, before deployment, provide prior notice for a new algorithm or material algorithm change, provide a description and unique algorithm identifier, and perform appropriate successful testing. The unique identifier is to be included in orders/quotes generated or governed by the algorithm.
 
@@ -114,7 +132,7 @@ Before any Bitvavo LIVE consideration, P300 must have evidence that:
 
 Runtime/current Bitvavo rules remain authoritative; re-verify before LIVE.
 
-## 8. Execution remains disconnected
+## 9. Execution remains disconnected
 
 P300 remains research/preflight/governance code. It is not authorized to place orders and has not been connected to LIVE execution.
 
