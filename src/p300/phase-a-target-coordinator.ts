@@ -18,6 +18,24 @@ export interface PhaseAActionableTarget {
   actionableReceivedMonoNs: string;
 }
 
+export type PhaseATargetAlignmentState =
+  | {
+      status: 'missing';
+      missing: readonly ('book' | 'ticker')[];
+      observedThroughMonoNs?: string;
+    }
+  | {
+      status: 'mismatched';
+      bookReceivedMonoNs: string;
+      tickerReceivedMonoNs: string;
+      observedThroughMonoNs: string;
+    }
+  | {
+      status: 'aligned';
+      actionable: PhaseAActionableTarget;
+      observedThroughMonoNs: string;
+    };
+
 interface StampedBookState {
   state: BitvavoLocalBookState;
   stamp: PhaseAReceiveStamp;
@@ -120,6 +138,15 @@ export class PhaseATargetCoordinator {
     return this.maybeActionable();
   }
 
+  /**
+   * Read the latest target-alignment state without treating a prior emission as
+   * fresh evidence. This separates state validity from signal deduplication so
+   * horizon sampling can fail closed on missing/mismatched inputs.
+   */
+  currentAlignment(): PhaseATargetAlignmentState {
+    return this.evaluateAlignment();
+  }
+
   /** Sequence gap/disconnect callers use this to fail closed until resync. */
   invalidateBook(): void {
     this.latestBook = undefined;
@@ -141,23 +168,76 @@ export class PhaseATargetCoordinator {
     this.lastObservedMonoNs = mono;
   }
 
-  private maybeActionable(): PhaseAActionableTarget | null {
-    if (!this.latestBook || !this.latestTicker) return null;
+  private evaluateAlignment(): PhaseATargetAlignmentState {
+    const missing: ('book' | 'ticker')[] = [];
+    if (!this.latestBook) missing.push('book');
+    if (!this.latestTicker) missing.push('ticker');
+    if (missing.length > 0) {
+      const observedThroughMonoNs = this.lastObservedMonoNs?.toString();
+      return Object.freeze({
+        status: 'missing' as const,
+        missing: Object.freeze(missing),
+        ...(observedThroughMonoNs !== undefined ? { observedThroughMonoNs } : {}),
+      });
+    }
 
-    const { state, stamp: bookStamp } = this.latestBook;
-    const ticker = this.latestTicker;
+    const { state, stamp: bookStamp } = this.latestBook!;
+    const ticker = this.latestTicker!;
     const book = bitvavoStateToOrderBook(state);
     const bestBid = book.bids[0];
     const bestAsk = book.asks[0];
     if (!bestBid || !bestAsk) throw new Error('synchronized Bitvavo book has no top of book');
 
+    const observedThrough = laterStamp(bookStamp, ticker.stamp);
     const agrees =
       sameNumber(bestBid.price, ticker.bid) &&
       sameNumber(bestBid.baseQty, ticker.bidSize) &&
       sameNumber(bestAsk.price, ticker.ask) &&
       sameNumber(bestAsk.baseQty, ticker.askSize);
-    if (!agrees) return null;
+    if (!agrees) {
+      return Object.freeze({
+        status: 'mismatched' as const,
+        bookReceivedMonoNs: bookStamp.receivedMonoNs,
+        tickerReceivedMonoNs: ticker.stamp.receivedMonoNs,
+        observedThroughMonoNs: observedThrough.receivedMonoNs,
+      });
+    }
 
+    const target: CausalMarketEventInput = {
+      venue: 'bitvavo',
+      symbol: state.market,
+      bid: bestBid.price,
+      ask: bestAsk.price,
+      receivedMonoNs: observedThrough.receivedMonoNs,
+      receivedAtMs: observedThrough.receivedAtMs,
+      // The book timestamp is the last transaction timestamp, not this book
+      // mutation's event time. Keep it separately as provenance; never place it
+      // in sourceObservedAtMs where a consumer could mistake it for causality.
+      sourceSequence: state.nonce,
+    };
+
+    const actionable: PhaseAActionableTarget = {
+      target,
+      book,
+      bookNonce: state.nonce,
+      bookExchangeTimestampNs: state.exchangeTimestampNs,
+      ticker: { ...ticker, stamp: { ...ticker.stamp } },
+      bookReceivedMonoNs: bookStamp.receivedMonoNs,
+      tickerReceivedMonoNs: ticker.stamp.receivedMonoNs,
+      actionableReceivedMonoNs: observedThrough.receivedMonoNs,
+    };
+    return Object.freeze({
+      status: 'aligned' as const,
+      actionable,
+      observedThroughMonoNs: observedThrough.receivedMonoNs,
+    });
+  }
+
+  private maybeActionable(): PhaseAActionableTarget | null {
+    const alignment = this.evaluateAlignment();
+    if (alignment.status !== 'aligned') return null;
+
+    const { ticker } = alignment.actionable;
     const tickerToken = [
       ticker.stamp.receivedMonoNs,
       ticker.bid,
@@ -167,30 +247,7 @@ export class PhaseATargetCoordinator {
     ].join('|');
     if (tickerToken === this.lastEmittedTickerToken) return null;
 
-    const actionableStamp = laterStamp(bookStamp, ticker.stamp);
-    const target: CausalMarketEventInput = {
-      venue: 'bitvavo',
-      symbol: state.market,
-      bid: bestBid.price,
-      ask: bestAsk.price,
-      receivedMonoNs: actionableStamp.receivedMonoNs,
-      receivedAtMs: actionableStamp.receivedAtMs,
-      // The book timestamp is the last transaction timestamp, not this book
-      // mutation's event time. Keep it separately as provenance; never place it
-      // in sourceObservedAtMs where a consumer could mistake it for causality.
-      sourceSequence: state.nonce,
-    };
-
     this.lastEmittedTickerToken = tickerToken;
-    return {
-      target,
-      book,
-      bookNonce: state.nonce,
-      bookExchangeTimestampNs: state.exchangeTimestampNs,
-      ticker: { ...ticker, stamp: { ...ticker.stamp } },
-      bookReceivedMonoNs: bookStamp.receivedMonoNs,
-      tickerReceivedMonoNs: ticker.stamp.receivedMonoNs,
-      actionableReceivedMonoNs: actionableStamp.receivedMonoNs,
-    };
+    return alignment.actionable;
   }
 }
