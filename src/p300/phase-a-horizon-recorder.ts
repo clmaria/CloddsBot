@@ -207,7 +207,14 @@ export class PhaseAHorizonRecorder {
   constructor(episode: PhaseAEpisode, config: PhaseAHorizonRecorderConfig) {
     validateEpisode(episode);
     this.episodeValue = episode;
-    this.maxLatenessNs = msToNs(config.maxHorizonLatenessMs, 'maxHorizonLatenessMs');
+    const maxLatenessNs = msToNs(config.maxHorizonLatenessMs, 'maxHorizonLatenessMs');
+    // 1s is the minimum spacing between frozen Phase-A horizons (1s -> 2s).
+    // Keeping the acceptance window strictly smaller prevents one market state
+    // from satisfying two adjacent horizon windows.
+    if (maxLatenessNs >= 1_000_000_000n) {
+      throw new Error('maxHorizonLatenessMs must be less than the minimum 1-second horizon spacing');
+    }
+    this.maxLatenessNs = maxLatenessNs;
   }
 
   get episode(): PhaseAEpisode {
