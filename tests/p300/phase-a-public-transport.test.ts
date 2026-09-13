@@ -59,6 +59,10 @@ function snapshotBody(timestampLiteral = '1752139200123456789'): string {
   return `{"market":"BTC-USDC","nonce":11,"bids":[["98","1.5"]],"asks":[["99","2"]],"timestamp":${timestampLiteral}}`;
 }
 
+function firstBitvavoBookUpdate(): string {
+  return '{"event":"book","market":"BTC-USDC","nonce":10,"bids":[],"asks":[],"timestamp":1752139200123456700}';
+}
+
 function buildHarness(snapshot = snapshotBody()) {
   const sockets = new Map<string, FakeSocket>();
   const transportEvents: PhaseAPublicTransportEvent[] = [];
@@ -124,7 +128,7 @@ async function flushAsync(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-test('uses only public endpoints and sends keyless market-data subscriptions', async () => {
+test('uses only public endpoints and waits for live Bitvavo book overlap before snapshot', async () => {
   const h = buildHarness();
   h.transport.start();
   assert.deepEqual([...h.sockets.keys()].sort(), [
@@ -154,6 +158,12 @@ test('uses only public endpoints and sends keyless market-data subscriptions', a
 
   const serialized = JSON.stringify({ endpoints: PHASE_A_PUBLIC_ENDPOINTS, bitvavoSubscribe, krakenSubscribe });
   assert.doesNotMatch(serialized, /api[_-]?key|secret|signature|listenKey/i);
+
+  await flushAsync();
+  assert.equal(h.fetchCalls, 0, 'opening/subscribing alone must not mark a REST snapshot as overlapped');
+  assert.equal(h.core.bitvavoSynchronized, false);
+
+  bitvavo.emit('message', firstBitvavoBookUpdate());
   await flushAsync();
   assert.equal(h.fetchCalls, 1);
   assert.ok(h.runtimeEvents.includes('bitvavo_book_synchronized'));
@@ -225,7 +235,10 @@ test('Bitvavo snapshot keeps an unsafe nanosecond integer raw until precision-pr
   assert.ok(bitvavo);
   bitvavo.emit('open');
   await flushAsync();
+  assert.equal(h.fetchCalls, 0);
 
+  bitvavo.emit('message', firstBitvavoBookUpdate());
+  await flushAsync();
   assert.equal(h.fetchCalls, 1);
   assert.equal(h.core.bitvavoSynchronized, true);
   assert.ok(h.runtimeEvents.includes('bitvavo_book_synchronized'));
