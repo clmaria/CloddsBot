@@ -25,9 +25,10 @@ This ledger exists to prevent infrastructure work from quietly becoming an unlim
 | 2026-09-12 | Adversarial hardening: NaN/Infinity fail-closed controls, sell-side fixed-base correction, fillable-only slippage statistics, venue-gate revalidation | 0.5 h | ESTIMATED |
 | 2026-09-13 | Clodds capability audit; Binance Spot/Futures correction; Edge Thesis shortlist; Bitvavo BTC-USDC economics and long-only constraint | 0.5 h | ESTIMATED |
 | 2026-09-13 | Precision-safe Bitvavo sync, conservative maker-fill model, bounded active window and public-evidence collector design | 0.5 h | ESTIMATED |
+| 2026-09-13 | Phase A clock audit, keyless collector specification, Evidence Envelope v1 and absolute-payoff hurdle analysis | 0.5 h | ESTIMATED |
 
 ## Remaining budget
 
 Cannot be stated honestly until the historical block is reconciled. It must not be reported as a numeric remaining-hour balance yet.
 
-The explicit post-ledger charges above total **3.5 h estimated**, but this is not the same thing as saying 16.5 h remain because the pre-ledger historical block is unresolved.
+The explicit post-ledger charges above total **4.0 h estimated**, but this is not the same thing as saying 16.0 h remain because the pre-ledger historical block is unresolved.
