@@ -1,231 +1,181 @@
 # P300 Edge Thesis Shortlist — 2026-09-13
 
-Status: **RESEARCH / PAPER ONLY**. This document authorizes no LIVE trading, no capital increase, no exchange connection, no shorting and no weakening of the Risk Envelope.
+Status: **RESEARCH / PAPER ONLY**. This document authorizes no LIVE trading, capital increase, exchange execution connection, shorting or weakening of the Risk Envelope.
 
-## Decision this document supports
+## Decision
 
-Choose the smallest next experiment that can falsify a plausible short-term Spot edge before P300 spends more user attention or builds an execution adapter.
+Choose the smallest experiment capable of falsifying a plausible short-term Spot edge before P300 spends more user attention or builds an execution adapter.
 
-The decision is not “which indicator looks best?” It is: **is there a structural source of realizable net edge, after fees and execution effects, that can plausibly survive at P300 scale?**
+The question is not “which indicator looks best?” It is: **is there a structural source of realizable net edge, after fees, non-fill/adverse-selection effects and operational burden, that can plausibly survive at P300 scale?**
 
-## Current venue economics
+## Current economics baseline
 
-### Bitvavo EUR crypto pairs — fee tier €0+
+### Bitvavo EUR crypto pairs — base tier
+- Maker: 15 bps per fill
+- Taker: 25 bps per fill
+- fee-only RT: 30 / 40 / 50 bps for maker-maker / maker-taker / taker-taker.
 
-- Maker: **0.15% / 15 bps per fill**
-- Taker: **0.25% / 25 bps per fill**
-- Fee-only round-trip floors:
-  - maker/maker: **30 bps**
-  - maker/taker: **40 bps**
-  - taker/taker: **50 bps**
+### Bitvavo USDC crypto pairs — base tier
+- Maker: 5 bps per fill
+- Taker: 5 bps per fill
+- fee-only RT: 10 bps.
 
-### Bitvavo USDC crypto pairs — fee tier €0+
+These are fee floors, not MVE. Spread, slippage, adverse selection, fill/non-fill economics, infrastructure/operational cost, same-horizon benchmark and safety margin remain downstream terms.
 
-- Maker: **0.05% / 5 bps per fill**
-- Taker: **0.05% / 5 bps per fill**
-- Fee-only round-trip floor: **10 bps** for maker/maker, maker/taker, or taker/taker.
+BTC-USDC is the current primary pair because the fee floor leaves materially more economic room than BTC-EUR. Runtime venue metadata remains authoritative for any future executability decision.
 
-These are **fee floors, not MVE**. Spread, slippage, adverse selection, fill probability, non-fill opportunity cost, infrastructure/operational costs and a safety margin remain to be measured.
+## Thesis A — cross-venue taker lead/lag
 
-Bitvavo currently lists `BTC-USDC`; its trading rules show a minimum order value of 5 (quote-equivalent) and a BTC base minimum. Runtime market metadata remains authoritative and must be fetched before any future order path.
+Classification:
+- BTC/EUR: **REJECT primary / CONTROL only**
+- BTC/USDC: **WATCH / diagnostic only**
 
-Sources:
-- https://bitvavo.com/es/fees
-- https://bitvavo.com/es/trading-rules
-- https://docs.bitvavo.com/docs/rest-api/get-markets/
-
-### Kraken EUR comparator — current tier 1
-
-- Maker: **0.40% / 40 bps per fill**
-- Taker: **0.80% / 80 bps per fill**
-- Fee-only round-trip floors:
-  - maker/maker: **80 bps**
-  - maker/taker: **120 bps**
-  - taker/taker: **160 bps**
-
-Kraken remains useful as a regulated comparator, but its default spot fee floor makes short-horizon micro-trading materially harder at P300 scale.
-
-Source:
-- https://support.kraken.com/es/articles/cross-platform-fee-tier-changes
-
-## Thesis A — Cross-venue taker lead/lag
-
-**Classification:**
-- BTC/EUR: **REJECT as primary P300 strategy; keep only as measurement/control.**
-- BTC/USDC: **WATCH / diagnostic experiment only.**
-
-### Anomaly
-
-A global reference venue moves first and Bitvavo reprices later, leaving a temporarily stale executable quote.
-
-### Counterparty and mechanism
-
-The other side would be liquidity providers whose local quote has not yet updated, or local inventory/order flow that temporarily leaves a stale quote available. The proposed sustaining mechanism is venue fragmentation plus network, matching and local inventory/repricing delays.
+### Proposed anomaly/mechanism
+A reference venue moves first and Bitvavo reprices later, leaving a stale local executable quote. The hypothesized counterparty is local liquidity that has not yet repriced or inventory/order flow temporarily pinning a stale quote.
 
 ### Adversarial check
-
-This is one of the most competed HFT anomalies in crypto. Professional market makers already observe multiple venues and can reprice in milliseconds. A public-feed retail bot may see the opportunity only after it has disappeared. Therefore “global venue moved first” is **not** itself evidence of edge.
-
-EUR is especially unattractive because a taker/taker round trip starts at 50 bps before spread/slippage. USDC lowers the fee floor to 10 bps, but that only makes the thesis testable; it does not prove it.
+This is one of the most competed crypto HFT anomalies. Public-feed P300 should assume professional market makers can observe/reprice faster. “Reference moved first” is not evidence of edge.
 
 ### Falsifiers
-
-Reject the thesis if any of these hold after preregistered validation:
-1. conditional target repricing after a reference shock does not exceed measured execution costs;
-2. apparent lag disappears when aligned using exchange and local-receive timestamps;
-3. the edge exists only at horizons shorter than realistic data + decision + order latency;
+Reject if:
+1. target repricing after a reference shock does not exceed measured costs;
+2. the apparent lag disappears under **same-process monotonic receive-time alignment**;
+3. any effect exists only below realistic data/decision/order latency;
 4. OOS expectancy is non-positive after costs;
-5. results depend on one fitted shock threshold/window;
-6. opportunity frequency is too low to justify operational burden.
+5. results require fitted shock thresholds/windows;
+6. opportunity frequency does not justify operational burden.
 
-### Half-life
+Half-life: unknown; measure rather than assume.
 
-**Unknown; measure it.** Do not assume milliseconds, seconds, or minutes.
+## Thesis B — standalone order-book imbalance
 
-## Thesis B — Standalone order-book imbalance
+Classification: **COMBINE / filter only**.
 
-**Classification: COMBINE, not a standalone Edge Thesis.**
+Order-book imbalance is public and heavily competed. A statistically predictive few-bps next move is economically irrelevant if fees/execution consume it.
 
-Top-of-book/depth imbalance can be predictive, but it is public, common and heavily competed. A statistically predictive few-bps next move is not economically useful if fees and execution consume it.
-
-Do **not** build an “imbalance strategy.” Use imbalance only as a conditioning / veto feature inside another thesis:
-- reject entries that fight local order flow;
+Use it only to:
+- reject entries fighting local order flow;
 - identify adverse-selection regimes;
-- segment results by imbalance bucket after the primary hypothesis is fixed.
+- segment results after the primary hypothesis is frozen.
 
-It may improve another edge; it does not earn a separate strategy slot or separate multiple-testing budget today.
+It does not earn a separate strategy slot or multiple-testing budget today.
 
-## Thesis C — Cross-venue-anchored passive reversion
+## Thesis C — cross-venue-anchored passive reversion
 
-**Classification: EXPERIMENT — current primary candidate.**
+Classification: **EXPERIMENT — primary candidate**.
 
 ### Anomaly
+Bitvavo temporarily overshoots a fresh cross-venue fair-value anchor because of local aggressive flow/inventory pressure, then partially reverts.
 
-Bitvavo temporarily **overshoots** a fresh cross-venue fair-value reference because of local aggressive flow or inventory pressure, then partially reverts.
+This is not raw taker latency arbitrage. The future hypothetical implementation would test whether passive liquidity provision during a local dislocation is compensated after costs.
 
-This differs from taker lead/lag. The bot is not trying to win a raw latency race by crossing a stale ask/bid. It waits for a local dislocation and tests whether providing liquidity on the reversion side is compensated after costs.
+### Counterparty/mechanism
+The proposed counterparty is impatient/inventory-motivated local flow demanding immediacy. The proposed mechanism is compensation for supplying liquidity against a temporary local dislocation while independent venues provide the fair-value anchor.
 
-### Counterparty and sustaining mechanism
+Plausible, not proven. Phase A must try to kill it.
 
-The proposed counterparty is impatient or inventory-motivated local flow demanding immediacy during a transient shock. The proposed edge is compensation for supplying liquidity during that temporary imbalance, with an external venue composite acting as a fair-value anchor.
+### Primary reference cohort
+For BTC-USDC Phase A:
+- target: Bitvavo BTC-USDC;
+- reference A: Kraken Spot BTC/USDC;
+- reference B: Binance Spot BTCUSDC as public reference data only.
 
-This mechanism is plausible but **unproven**. The experiment must attempt to falsify it.
+Coinbase is not counted as an independent direct-USDC reference because current public `-USDC` data can alias the corresponding `-USD` product. Synthetic quote conversion, if ever used, is a separate preregistered cohort and is never silently mixed with the primary direct-USDC cohort.
+
+### Timing contract
+Cross-feed ordering, freshness, skew and horizon boundaries use **same-process local monotonic receive time only**.
+- wall clock = audit/log correlation only;
+- exchange timestamps = provenance only where semantics are documented;
+- Bitvavo `book.timestamp` is not the timestamp of every book change;
+- a collector restart invalidates any open episode.
+
+Any apparent edge that requires mixing venue clocks or wall-clock ordering fails the timing gate.
 
 ### Why this candidate outranks the others
+1. It does not require winning a pure latency race.
+2. BTC-USDC starts with a 10 bps fee-only RT floor rather than 30+ bps on EUR.
+3. Cross-venue fair value and local imbalance play different roles instead of multiplying unrelated strategies.
+4. It fits low-touch bounded autonomy: no-trade/idle is valid until a preregistered dislocation appears.
+5. The mechanism has an identifiable counterparty and falsifiers.
 
-1. It does not require P300 to win a pure latency race against professional market makers.
-2. It can use maker execution in a future implementation.
-3. BTC/USDC on Bitvavo has a 10 bps fee-only round-trip floor versus 30 bps maker/maker on BTC/EUR.
-4. Cross-venue fair value and local imbalance can be used as independent guards instead of multiplying unrelated strategies.
-5. It fits low-touch bounded autonomy better than continuous two-sided market making: the system may stay idle until a preregistered dislocation appears.
+### Spot asymmetry — long-only executable side
+P300 forbids leverage, futures, margin and shorting.
+- Bitvavo cheap vs reference: potentially monetizable buy-first path.
+- Bitvavo expensive vs reference: monetization requires pre-existing BTC inventory or a short path.
 
-### Spot asymmetry: Phase A is long-only for executable hypotheses
+Persistent BTC inventory would add continuous exposure and change the Risk Envelope. It is not auto-authorized. Phase A records both directions, but only the **underpriced/buy-first** direction is executable under the current envelope. If the effect lives only on the overpriced side: NO-GO under the current envelope or a new human-gated inventory decision.
 
-P300 does not permit leverage, futures, margin or shorting. A Spot reversion thesis is therefore **not symmetric** unless P300 deliberately carries a base-asset inventory.
+### USDC operational trade-off
+Lower USDC fees do not remove tax/accounting complexity. BTC↔USDC activity requires accurate EUR valuation/lot accounting for a Spanish individual investor. Treat this as ledger/admin complexity and after-tax analysis, not as a fabricated per-trade tax fee inside MVE.
 
-- If Bitvavo BTC-USDC is **cheap** versus the reference, a future Spot implementation could buy BTC and later sell it after reversion.
-- If Bitvavo BTC-USDC is **expensive** versus the reference, monetizing that side requires pre-existing BTC inventory to sell first and buy back later.
-
-Maintaining BTC inventory would add continuous market exposure unrelated to the transient trade and would change the Risk Envelope. That is **not automatically authorized**.
-
-Therefore Phase A records both directions for research, but only the **underpriced / buy-first** direction counts as executable under the current long-only envelope. If evidence exists only on the overpricing side, the result is not “add inventory”; it is **NO-GO under the current envelope or a new human-gated inventory decision**.
-
-### Important trade-off: USDC
-
-The lower USDC fee schedule is not free economics.
-
-For a Spanish individual investor, exchanging one virtual currency for another is a taxable exchange (“permuta”) that can generate a capital gain/loss. A BTC↔USDC workflow therefore requires accurate EUR valuation and lot/accounting for the assets involved. This increases reporting/ledger burden even if the exchange fee is lower.
-
-This tax/accounting burden must be automated if the thesis survives. It is an **operational cost and complexity term**, not a reason to invent a per-trade tax fee inside MVE.
-
-Source:
-- https://sede.agenciatributaria.gob.es/Sede/Ayuda/23Presentacion/100/7_6_6_2/ganancias_perdidas_monedas_virtuales.html
-
-### Regime
-
-Candidate observations must meet all of the following:
-- target book and trades fresh;
-- global reference fresh;
-- target market status `trading`;
-- dynamic min-order/tick metadata available;
-- complete book synchronization / no sequence gap;
-- fixed ticket executable with sufficient depth;
-- stablecoin/reference basis observable;
-- no automatic risk increase to gain order-size granularity.
+### Regime/data-quality requirements
+A valid candidate observation requires:
+- target market normal/trading;
+- sequence-correct Bitvavo local book;
+- Bitvavo ticker/local-book BBO agreement;
+- fixed ticket with sufficient depth;
+- fresh Kraken+Binance BTC-USDC references;
+- reference dispersion inside frozen quality limit;
+- same-process monotonic timing integrity;
+- dynamic market metadata available;
+- no risk increase merely to gain granularity.
 
 ### Falsifiers
+Reject/PAUSE if:
+1. reversion magnitude cannot plausibly clear the effective hurdle;
+2. measured effect disappears under monotonic receive-time alignment;
+3. source dispersion/noise explains the apparent dislocation;
+4. the effect vanishes OOS or under modestly worse assumptions;
+5. it requires parameter hunting across bins/windows;
+6. its useful half-life is shorter than a realistic future execution path;
+7. operational/tax-ledger burden dominates net economic value;
+8. valid independent opportunities are too scarce to earn attention;
+9. the effect exists only on the unauthorized overpricing side;
+10. once the fill clock gate is resolved, non-fill/adverse selection destroys expectancy.
 
-Reject or PAUSE if:
-1. reversion magnitude after realistic maker fills does not clear the **effective hurdle**;
-2. maker fills are systematically adverse — fills occur mainly when the reference continues moving against the quote;
-3. non-fill rate removes the apparent expectancy;
-4. profitability vanishes OOS or under modestly worse fill assumptions;
-5. the effect requires parameter hunting across many windows/bins;
-6. the best effect occurs only at a half-life shorter than realistic cancel/replace latency;
-7. net economic edge is too small relative to operational/tax-ledger burden;
-8. the number of independent opportunities is too small to earn P300 attention;
-9. the measurable edge exists only on the overpricing side that requires unauthorized base inventory.
+### Fill-model status
+The conservative visible-queue logic is useful fixture/research logic but **is not Phase-A-valid fill-probability evidence yet**. Its current active window uses Bitvavo exchange-trade timestamps while signal activation is local.
+
+Until activation/expiry and trade arrivals are all represented in the same-process monotonic receive-time domain (or another explicitly validated conservative clock mapping exists):
+- do not report maker fill probability;
+- do not use the helper to promote the thesis;
+- Phase A may still measure dislocation/reversion/depth economics.
 
 ### Half-life
-
-Unknown. Measure forward reversion at **fixed, preregistered horizons** rather than optimizing the horizon after seeing outcomes. Initial research horizons: 1s, 2s, 5s, 15s, 30s, 60s. These are measurement buckets, not trading parameters.
+Unknown. Measure only fixed preregistered forward horizons: 1s, 2s, 5s, 15s, 30s, 60s. These are measurement buckets, not fitted trading parameters.
 
 ## Minimal evidence experiment
 
-### Phase A — screening, no performance claim
+### Phase A — screening
+Collect **30 independent dislocation episodes**, not ticks:
+- BTC-USDC primary;
+- BTC-EUR control;
+- both signs retained, but only underpriced side counts as executable under current long-only envelope.
 
-Collect **30 independent dislocation episodes** for BTC-USDC plus BTC-EUR as a control. Each episode stores one immutable evidence envelope containing:
-- venue / pair;
-- direction (`underpriced` or `overpriced`);
-- whether the direction is executable under the current long-only envelope;
-- exchange timestamp and local receive timestamp;
-- raw target best bid/ask + depth snapshot;
-- local trades around the event;
-- reference price inputs and timestamps;
-- target/reference deviation;
-- local spread and imbalance;
-- fixed-ticket executable VWAP/slippage;
-- forward target/reference values at preregistered horizons;
-- hypothetical maker price and conservative fill state;
-- constraints/policy/source-version hashes.
+Each envelope follows `EVIDENCE_ENVELOPE_V1.md` and includes immutable raw-data pointers, monotonic timing, synchronized target state, Kraken+Binance references, deviation, spread/depth/slippage, fixed forward horizons and quality/invalidation reasons.
 
-Phase A answers only: **is there enough economic room to justify a larger test?** It cannot promote LIVE or establish statistical significance.
+Fill fields remain `not_evaluated_clock_gate` until the maker-fill timing refactor is validated.
+
+Phase A answers only whether enough economic room exists to justify a larger OOS test. It cannot promote LIVE or establish statistical significance.
 
 ### Phase B — only if Phase A survives
-
-Freeze the signal definition, deviation bins, horizons, fill models, primary metric, cost assumptions and kill criteria. Then collect at least **100 additional independent episodes** and evaluate OOS. Keep dual/adversarial fill assumptions. Do not select the winning window from the same sample used to report performance.
-
-## Required market-data path
-
-Bitvavo standard WebSocket exposes the necessary read-only primitives:
-- `book` subscription with order-book updates, nonce and nanosecond timestamp;
-- `trades` subscription with millisecond and nanosecond timestamps;
-- public `GET /markets` for status, minimums, tick size and fee category.
-
-Sources:
-- https://docs.bitvavo.com/docs/websocket-api/book-subscription/
-- https://docs.bitvavo.com/docs/websocket-api/trades-subscription/
-- https://docs.bitvavo.com/docs/rest-api/get-markets/
-
-The existing Clodds `CryptoFeed` can be reused conceptually as a global reference source, but its current implementation is Binance USDT / Coinbase USD oriented and is **not** target-venue BTC/EUR or BTC/USDC evidence. It must not be treated as a substitute for Bitvavo book/trade data.
+Freeze source set, signal definition, selected execution assumptions, horizon/active-window policy, primary metric, cost model and kill criteria. Then collect at least **100 new independent episodes OOS**. Phase A data may not be reused as Phase B validation evidence.
 
 ## Risk decision
 
-**No Risk Envelope changes.**
-
-Cheaper USDC fees do not justify increasing exposure, daily loss, drawdown, slots, risk per position or persistent BTC inventory. First determine whether an edge exists within the already acceptable long-only envelope; if the venue/pair cannot implement it safely, the correct answer is NO-GO.
+**No Risk Envelope changes.** Cheaper USDC fees do not justify more exposure, daily loss, drawdown, slots, risk per position or persistent BTC inventory.
 
 ## Promotion state
 
-- Thesis A BTC/EUR taker lag: **REJECT primary / CONTROL only**
-- Thesis A BTC/USDC taker lag: **WATCH / diagnostic only**
-- Thesis B standalone imbalance: **COMBINE as filter; no independent strategy**
-- Thesis C BTC-USDC anchored passive reversion, underpriced side: **EXPERIMENT**
-- Thesis C BTC-USDC anchored passive reversion, overpriced side: **RESEARCH ONLY unless inventory is separately human-authorized**
-- Thesis C BTC/EUR anchored passive reversion: **CONTROL / comparator**
+- Thesis A BTC/EUR taker lag: REJECT primary / CONTROL
+- Thesis A BTC/USDC taker lag: WATCH / diagnostic
+- Thesis B standalone imbalance: COMBINE / filter
+- Thesis C BTC-USDC underpriced side: EXPERIMENT
+- Thesis C BTC-USDC overpriced side: RESEARCH ONLY
+- Thesis C BTC-EUR: CONTROL
 
-No thesis is GO, PAPER_READY or LIVE_READY yet.
+No thesis is GO, PAPER_READY or LIVE_READY.
 
 ## Next action
 
-Build only a **read-only evidence collector/analyzer** for Thesis C. Do not build an execution adapter. The collector must be incapable of submitting orders and must fail closed on stale, malformed, out-of-sequence or incomparable data.
+Complete the **monotonic receive-time evidence/collector path** before representative Phase-A collection. Do not build an execution adapter. The collector must remain public/read-only, incapable of placing orders, and fail closed on stale, malformed, out-of-sequence, mixed-clock-domain or incomparable data.
