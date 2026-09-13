@@ -8,6 +8,10 @@ export interface SupervisorState {
   safeMode: boolean;
   consecutiveDecisionFailures: number;
   recoverySuccesses: number;
+  /**
+   * Process-local monotonic milliseconds. Do not persist these values across a
+   * process restart or mix them with wall-clock epoch timestamps.
+   */
   entryTimestamps: number[];
   safeModeReason?: string;
 }
@@ -39,14 +43,18 @@ function validateState(state: SupervisorState): void {
   }
   if (!Array.isArray(state.entryTimestamps)) throw new Error('entry timestamps must be an array');
   for (const timestamp of state.entryTimestamps) {
-    if (!Number.isFinite(timestamp) || timestamp <= 0) {
-      throw new Error('entry timestamps must be positive finite values');
+    if (!Number.isFinite(timestamp) || timestamp < 0) {
+      throw new Error('entry timestamps must be non-negative finite monotonic values');
     }
   }
 }
 
 function validateNow(now: number): void {
-  if (!Number.isFinite(now) || now <= 0) throw new Error('current time must be a positive finite timestamp');
+  if (!Number.isFinite(now) || now < 0) throw new Error('current time must be a non-negative finite monotonic timestamp');
+}
+
+function monotonicNowMs(): number {
+  return performance.now();
 }
 
 export function createSupervisorState(): SupervisorState {
@@ -61,6 +69,9 @@ export function createSupervisorState(): SupervisorState {
 function pruneEntries(state: SupervisorState, now: number): SupervisorState {
   validateState(state);
   validateNow(now);
+  if (state.entryTimestamps.some((timestamp) => timestamp > now)) {
+    throw new Error('supervisor monotonic clock moved backwards or clock domains were mixed');
+  }
   const cutoff = now - 60 * 60 * 1000;
   return { ...state, entryTimestamps: state.entryTimestamps.filter(ts => ts > cutoff) };
 }
@@ -115,7 +126,7 @@ export function recordDecisionSuccess(
 export function canOpenNewExposure(
   stateInput: SupervisorState,
   config: SupervisorConfig,
-  now = Date.now()
+  now = monotonicNowMs()
 ): SupervisorDecision {
   validateConfig(config);
   const state = pruneEntries(stateInput, now);
@@ -134,7 +145,7 @@ export function canOpenNewExposure(
 export function recordEntry(
   stateInput: SupervisorState,
   config: SupervisorConfig,
-  now = Date.now()
+  now = monotonicNowMs()
 ): SupervisorState {
   const decision = canOpenNewExposure(stateInput, config, now);
   if (!decision.allowed) throw new Error(decision.reason);
