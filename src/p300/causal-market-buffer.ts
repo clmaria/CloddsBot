@@ -49,7 +49,7 @@ export interface CausalSnapshotFailure {
 export interface CausalSnapshotSuccess {
   ok: true;
   target: CausalMarketEvent;
-  references: CausalMarketEvent[];
+  references: readonly CausalMarketEvent[];
   referenceMid: number;
   referenceDispersionBps: number;
   referenceReceiveSkewNs: string;
@@ -265,7 +265,7 @@ export class CausalMarketBuffer {
     return {
       ok: true,
       target,
-      references: Object.freeze([...selected]) as unknown as CausalMarketEvent[],
+      references: Object.freeze([...selected]),
       referenceMid,
       referenceDispersionBps: dispersionBps,
       referenceReceiveSkewNs: receiveSkew.toString(),
@@ -305,6 +305,10 @@ export class CausalMarketBuffer {
     parseMonoNs(target.receivedMonoNs, 'target receivedMonoNs');
     if (!Number.isSafeInteger(target.ingestSeq) || target.ingestSeq <= 0 || target.ingestSeq > this.ingestSeqValue) {
       throw new Error('target ingest sequence is outside the current session');
+    }
+    const targetHistory = this.histories.get(streamKey(this.target));
+    if (!targetHistory?.some((event) => event === target)) {
+      throw new Error('target was not ingested or is no longer retained by this causal buffer');
     }
   }
 }

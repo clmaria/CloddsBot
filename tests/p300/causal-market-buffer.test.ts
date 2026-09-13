@@ -163,3 +163,32 @@ test('per-stream history is bounded without changing causal ordering semantics',
   assert.equal(snapshot.ok, true);
   if (snapshot.ok) assert.equal(snapshot.references[0].receivedMonoNs, '102');
 });
+
+test('fabricated target clones are rejected even when their fields look valid', () => {
+  const buffer = new CausalMarketBuffer(config());
+  buffer.ingest(event(KRAKEN, 100n));
+  buffer.ingest(event(BINANCE, 100n));
+  const target = buffer.ingest(event(TARGET, 101n));
+  assert.equal(buffer.snapshotForTarget(target).ok, true);
+
+  const forged = { ...target };
+  assert.throws(
+    () => buffer.snapshotForTarget(forged),
+    /not ingested or is no longer retained/,
+  );
+});
+
+test('evicted target events fail closed instead of being reconstructed from newer history', () => {
+  const buffer = new CausalMarketBuffer(config({ maxHistoryPerStream: 2 }));
+  buffer.ingest(event(KRAKEN, 100n));
+  buffer.ingest(event(BINANCE, 100n));
+  const oldTarget = buffer.ingest(event(TARGET, 101n));
+  buffer.ingest(event(TARGET, 102n));
+  buffer.ingest(event(TARGET, 103n));
+
+  assert.equal(buffer.historySize(TARGET), 2);
+  assert.throws(
+    () => buffer.snapshotForTarget(oldTarget),
+    /not ingested or is no longer retained/,
+  );
+});
