@@ -154,6 +154,11 @@ function canonicalize(value: unknown, seen: WeakSet<object>, path: string): stri
   seen.add(value);
   try {
     if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(value, index)) {
+          throw new Error(`${path} contains a sparse array hole at index ${index}`);
+        }
+      }
       return `[${value.map((item, index) => canonicalize(item, seen, `${path}[${index}]`)).join(',')}]`;
     }
 
