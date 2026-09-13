@@ -5,35 +5,53 @@ import {
   rankEconomicsMatrix,
 } from '../../src/p300/economics-matrix';
 
+const viableEconomics = {
+  grossEdgeBps: 120,
+  entryFeeBps: 10,
+  exitFeeBps: 10,
+  spreadBps: 5,
+  slippageBps: 5,
+  safetyMarginBps: 10,
+  holdingPeriodMinutes: 60,
+  expectedTradesPerDay: 1,
+  benchmarkReturnBpsSameHorizon: 10,
+};
+
 test('economics matrix rejects candidate that cannot reduce under stress', () => {
   const row = evaluateEconomicsMatrixCandidate({
     venue: 'example',
     symbol: 'BTC/EUR',
     market: {
-      venue: 'example',
-      symbol: 'BTC/EUR',
-      price: 70_000,
-      minQuoteNotional: 5,
-      stepSize: 0.000001,
+      venue: 'example', symbol: 'BTC/EUR', price: 70_000,
+      minQuoteNotional: 5, stepSize: 0.000001,
     },
     positionBaseQty: 0.00015,
     adverseExitPrice: 35_000,
     requiredExitSlices: 2,
-    economics: {
-      grossEdgeBps: 120,
-      entryFeeBps: 10,
-      exitFeeBps: 10,
-      spreadBps: 5,
-      slippageBps: 5,
-      safetyMarginBps: 10,
-      holdingPeriodMinutes: 60,
-      expectedTradesPerDay: 1,
-      benchmarkReturnBpsSameHorizon: 10,
-    },
+    economics: viableEconomics,
   });
 
   assert.equal(row.tradable, false);
   assert.ok(row.reasons.includes('insufficient stressed exit granularity'));
+});
+
+test('economics matrix fails closed on invalid required exit slices', () => {
+  const base = {
+    venue: 'example',
+    symbol: 'BTC/EUR',
+    market: {
+      venue: 'example', symbol: 'BTC/EUR', price: 50_000,
+      minBaseQty: 0.0001, minQuoteNotional: 0.45, stepSize: 0.00000001,
+    },
+    positionBaseQty: 0.0002,
+    adverseExitPrice: 45_000,
+    economics: viableEconomics,
+  };
+
+  assert.throws(() => evaluateEconomicsMatrixCandidate({ ...base, requiredExitSlices: 0 }), /positive integer/);
+  assert.throws(() => evaluateEconomicsMatrixCandidate({ ...base, requiredExitSlices: -1 }), /positive integer/);
+  assert.throws(() => evaluateEconomicsMatrixCandidate({ ...base, requiredExitSlices: Number.NaN }), /positive integer/);
+  assert.throws(() => evaluateEconomicsMatrixCandidate({ ...base, requiredExitSlices: 1.5 }), /positive integer/);
 });
 
 test('economics matrix rejects beta disguised as alpha', () => {
@@ -41,12 +59,8 @@ test('economics matrix rejects beta disguised as alpha', () => {
     venue: 'example',
     symbol: 'BTC/EUR',
     market: {
-      venue: 'example',
-      symbol: 'BTC/EUR',
-      price: 50_000,
-      minBaseQty: 0.0001,
-      minQuoteNotional: 0.45,
-      stepSize: 0.00000001,
+      venue: 'example', symbol: 'BTC/EUR', price: 50_000,
+      minBaseQty: 0.0001, minQuoteNotional: 0.45, stepSize: 0.00000001,
     },
     positionBaseQty: 0.0002,
     adverseExitPrice: 45_000,
@@ -79,15 +93,8 @@ test('ranking prefers viable higher-alpha candidate', () => {
     positionBaseQty: 0.0002,
     adverseExitPrice: 45_000,
     economics: {
-      grossEdgeBps: 120,
-      entryFeeBps: 10,
-      exitFeeBps: 10,
-      spreadBps: 5,
-      slippageBps: 5,
-      safetyMarginBps: 10,
+      ...viableEconomics,
       holdingPeriodMinutes: 30,
-      expectedTradesPerDay: 1,
-      benchmarkReturnBpsSameHorizon: 10,
     },
   });
 
