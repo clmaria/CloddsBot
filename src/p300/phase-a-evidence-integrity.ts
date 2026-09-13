@@ -80,6 +80,63 @@ function assertUtcIso(value: string): string {
   return normalized;
 }
 
+function assertEvidenceKind(value: unknown): PhaseAEvidenceKind {
+  if (
+    value !== 'underpriced_episode'
+    && value !== 'overpriced_control'
+    && value !== 'background_control'
+    && value !== 'invalid_episode'
+  ) {
+    throw new Error('kind is not a supported Phase-A evidence kind');
+  }
+  return value;
+}
+
+function assertExchangeEventTimeSemantics(value: unknown): PhaseAExchangeEventTimeSemantics {
+  if (
+    value !== 'trade_execution'
+    && value !== 'server_event'
+    && value !== 'last_transaction'
+    && value !== 'not_available'
+  ) {
+    throw new Error('exchangeEventTimeSemantics is not supported');
+  }
+  return value;
+}
+
+function assertExchangeEventTimeContract(
+  semantics: PhaseAExchangeEventTimeSemantics,
+  exchangeEventTime: unknown,
+): void {
+  if (semantics === 'not_available' && exchangeEventTime !== undefined) {
+    throw new Error('exchangeEventTime must be absent when semantics are not_available');
+  }
+  if (semantics !== 'not_available' && exchangeEventTime === undefined) {
+    throw new Error('exchangeEventTime is required when exchange event-time semantics are declared');
+  }
+  if (typeof exchangeEventTime === 'number' && !Number.isFinite(exchangeEventTime)) {
+    throw new Error('numeric exchangeEventTime must be finite');
+  }
+  if (typeof exchangeEventTime === 'string' && !exchangeEventTime.trim()) {
+    throw new Error('string exchangeEventTime cannot be empty');
+  }
+  if (exchangeEventTime !== undefined && typeof exchangeEventTime !== 'number' && typeof exchangeEventTime !== 'string') {
+    throw new Error('exchangeEventTime must be a string or finite number when present');
+  }
+}
+
+function assertSupersessionPair(supersedesEpisodeId: unknown, supersessionReason: unknown): void {
+  if (supersedesEpisodeId !== undefined && (typeof supersedesEpisodeId !== 'string' || !supersedesEpisodeId.trim())) {
+    throw new Error('supersedesEpisodeId cannot be empty');
+  }
+  if (supersessionReason !== undefined && (typeof supersessionReason !== 'string' || !supersessionReason.trim())) {
+    throw new Error('supersessionReason cannot be empty');
+  }
+  if ((supersedesEpisodeId === undefined) !== (supersessionReason === undefined)) {
+    throw new Error('supersedesEpisodeId and supersessionReason must be provided together');
+  }
+}
+
 function canonicalize(value: unknown, seen: WeakSet<object>, path: string): string {
   if (value === null) return 'null';
   if (typeof value === 'string') return JSON.stringify(value);
@@ -153,18 +210,8 @@ export function createPhaseARawEventRecord(input: PhaseARawEventInput): PhaseARa
   if (!Number.isFinite(input.receivedWallMs)) throw new Error('receivedWallMs must be finite');
   const receivedMonoNs = assertMonoNs(input.receivedMonoNs, 'receivedMonoNs');
   if (typeof input.rawPayload !== 'string' || !input.rawPayload.length) throw new Error('rawPayload is required');
-  if (input.exchangeEventTimeSemantics === 'not_available' && input.exchangeEventTime !== undefined) {
-    throw new Error('exchangeEventTime must be absent when semantics are not_available');
-  }
-  if (input.exchangeEventTimeSemantics !== 'not_available' && input.exchangeEventTime === undefined) {
-    throw new Error('exchangeEventTime is required when exchange event-time semantics are declared');
-  }
-  if (typeof input.exchangeEventTime === 'number' && !Number.isFinite(input.exchangeEventTime)) {
-    throw new Error('numeric exchangeEventTime must be finite');
-  }
-  if (typeof input.exchangeEventTime === 'string' && !input.exchangeEventTime.trim()) {
-    throw new Error('string exchangeEventTime cannot be empty');
-  }
+  const exchangeEventTimeSemantics = assertExchangeEventTimeSemantics(input.exchangeEventTimeSemantics);
+  assertExchangeEventTimeContract(exchangeEventTimeSemantics, input.exchangeEventTime);
 
   const record: PhaseARawEventRecord = {
     schemaVersion: 'p300.phase-a.raw-event.v1',
@@ -174,14 +221,35 @@ export function createPhaseARawEventRecord(input: PhaseARawEventInput): PhaseARa
     receivedWallMs: input.receivedWallMs,
     receivedMonoNs,
     rawPayload: input.rawPayload,
-    exchangeEventTimeSemantics: input.exchangeEventTimeSemantics,
+    exchangeEventTimeSemantics,
     rawPayloadSha256: sha256Hex(input.rawPayload),
     ...(input.exchangeEventTime !== undefined ? { exchangeEventTime: input.exchangeEventTime } : {}),
   };
   return deepFreeze(record);
 }
 
+export function verifyPhaseARawEventRecord(record: PhaseARawEventRecord): boolean {
+  try {
+    if (record.schemaVersion !== 'p300.phase-a.raw-event.v1') return false;
+    assertText(record.source, 'source');
+    assertText(record.channel, 'channel');
+    assertText(record.sessionId, 'sessionId');
+    if (!Number.isFinite(record.receivedWallMs)) return false;
+    assertMonoNs(record.receivedMonoNs, 'receivedMonoNs');
+    if (typeof record.rawPayload !== 'string' || !record.rawPayload.length) return false;
+    const semantics = assertExchangeEventTimeSemantics(record.exchangeEventTimeSemantics);
+    assertExchangeEventTimeContract(semantics, record.exchangeEventTime);
+    const expected = sha256Hex(record.rawPayload);
+    if (assertSha256(record.rawPayloadSha256, 'rawPayloadSha256') !== expected) return false;
+    canonicalPhaseAJson(record);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function encodePhaseARawEventNdjson(record: PhaseARawEventRecord): string {
+  if (!verifyPhaseARawEventRecord(record)) throw new Error('raw Phase-A event failed integrity validation');
   return `${canonicalPhaseAJson(record)}\n`;
 }
 
@@ -191,24 +259,17 @@ export function finalizePhaseAEvidenceEnvelope<TBody extends Record<string, unkn
   assertNoForbiddenEvidenceKeys(draft);
   const cohortId = assertText(draft.cohortId, 'cohortId');
   const episodeId = assertText(draft.episodeId, 'episodeId');
+  const kind = assertEvidenceKind(draft.kind);
   const collectorCommitSha = assertCommitSha(draft.collectorCommitSha);
   const configHash = assertSha256(draft.configHash, 'configHash');
   const createdAtUtc = assertUtcIso(draft.createdAtUtc);
-  if (draft.supersedesEpisodeId !== undefined && !draft.supersedesEpisodeId.trim()) {
-    throw new Error('supersedesEpisodeId cannot be empty');
-  }
-  if (draft.supersessionReason !== undefined && !draft.supersessionReason.trim()) {
-    throw new Error('supersessionReason cannot be empty');
-  }
-  if ((draft.supersedesEpisodeId === undefined) !== (draft.supersessionReason === undefined)) {
-    throw new Error('supersedesEpisodeId and supersessionReason must be provided together');
-  }
+  assertSupersessionPair(draft.supersedesEpisodeId, draft.supersessionReason);
 
   const withoutHash = {
     schemaVersion: 'p300.phase-a.envelope.v1' as const,
     cohortId,
     episodeId,
-    kind: draft.kind,
+    kind,
     collectorCommitSha,
     configHash,
     createdAtUtc,
@@ -224,8 +285,16 @@ export function finalizePhaseAEvidenceEnvelope<TBody extends Record<string, unkn
 export function verifyPhaseAEvidenceEnvelope(envelope: PhaseAEvidenceEnvelope): boolean {
   try {
     const { contentHash, ...withoutHash } = envelope;
+    if (withoutHash.schemaVersion !== 'p300.phase-a.envelope.v1') return false;
     assertSha256(contentHash, 'contentHash');
     assertNoForbiddenEvidenceKeys(withoutHash);
+    assertText(withoutHash.cohortId, 'cohortId');
+    assertText(withoutHash.episodeId, 'episodeId');
+    assertEvidenceKind(withoutHash.kind);
+    assertCommitSha(withoutHash.collectorCommitSha);
+    assertSha256(withoutHash.configHash, 'configHash');
+    assertUtcIso(withoutHash.createdAtUtc);
+    assertSupersessionPair(withoutHash.supersedesEpisodeId, withoutHash.supersessionReason);
     return sha256Hex(canonicalPhaseAJson(withoutHash)) === contentHash.toLowerCase();
   } catch {
     return false;
