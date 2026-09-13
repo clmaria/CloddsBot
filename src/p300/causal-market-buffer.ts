@@ -66,6 +66,7 @@ export type CausalSnapshot = CausalSnapshotSuccess | CausalSnapshotRejected;
 /** A point-in-time snapshot sealed against the buffer's current ingest boundary. */
 export interface CausalAsOfSnapshot {
   cutoffMonoNs: string;
+  sealedAtMonoNs: string;
   cutoffIngestSeq: number;
   snapshot: CausalSnapshot;
 }
@@ -222,17 +223,25 @@ export class CausalMarketBuffer {
   /**
    * Seal the latest state known at or before a monotonic horizon cutoff.
    *
-   * The current ingest sequence becomes part of the boundary, so equal-clock
-   * events not yet ingested cannot be pulled backwards into this result. The
-   * returned object is a value snapshot; later buffer arrivals never mutate it.
+   * nowMonoNs must be sampled from the same process clock when the snapshot is
+   * sealed. The current ingest sequence becomes part of the boundary, so
+   * equal-clock events not yet ingested cannot be pulled backwards into this
+   * result. Later buffer arrivals never mutate the returned value snapshot.
    */
-  snapshotAsOf(cutoffMonoNs: string): CausalAsOfSnapshot {
+  snapshotAsOf(cutoffMonoNs: string, nowMonoNs: string): CausalAsOfSnapshot {
     const cutoffMono = parseMonoNs(cutoffMonoNs, 'cutoffMonoNs');
+    const nowMono = parseMonoNs(nowMonoNs, 'nowMonoNs');
+    if (nowMono < cutoffMono) throw new Error('causal cutoff is still in the future');
+    if (this.lastReceivedMonoNs !== undefined && nowMono < this.lastReceivedMonoNs) {
+      throw new Error('nowMonoNs precedes an event already received in this clock domain');
+    }
+
     const cutoffIngestSeq = this.ingestSeqValue;
     const target = this.latestAtBoundary(this.target, cutoffMono, cutoffIngestSeq);
     if (!target) throw new Error('no target state exists at or before the requested causal cutoff');
     return Object.freeze({
       cutoffMonoNs,
+      sealedAtMonoNs: nowMonoNs,
       cutoffIngestSeq,
       snapshot: this.buildSnapshot(target, cutoffMono, cutoffIngestSeq, cutoffMono),
     });
