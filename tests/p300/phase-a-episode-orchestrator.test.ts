@@ -194,6 +194,24 @@ test('causal session invalidation seals unresolved horizons and emits invalid_ep
   assert.equal(orchestrator.pendingEpisodeCount, 0);
 });
 
+test('post-close integrity failure marks the envelope invalid when a horizon is unresolved', async () => {
+  const { orchestrator, sink } = makeOrchestrator();
+  await armAndStart(orchestrator);
+
+  await orchestrator.advanceClock((START + 60n * SECOND).toString());
+  assert.equal(sink.envelopes.length, 0);
+  await orchestrator.invalidateSession(
+    (START + 60n * SECOND + 50n * MS).toString(),
+    'transport failed before final horizon evidence',
+  );
+
+  assert.equal(sink.envelopes.length, 1);
+  assert.equal(sink.envelopes[0].kind, 'invalid_episode');
+  const body = bodyOf(sink.envelopes[0]);
+  assert.equal(body.terminal.status, 'closed');
+  assert.ok(body.horizons.some((record) => record.status === 'invalidated'));
+});
+
 test('cannot cross into a new clock session while evidence remains unresolved', async () => {
   const { orchestrator } = makeOrchestrator();
   await armAndStart(orchestrator);
