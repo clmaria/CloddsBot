@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   canonicalPhaseAJson,
@@ -7,6 +8,7 @@ import {
   finalizePhaseAEvidenceEnvelope,
   hashPhaseAConfig,
   verifyPhaseAEvidenceEnvelope,
+  verifyPhaseARawEventRecord,
   type PhaseAEvidenceEnvelope,
 } from '../../src/p300/phase-a-evidence-integrity';
 
@@ -30,13 +32,14 @@ test('raw event records preserve exact payload and bind it to a SHA-256 digest',
   });
   assert.equal(record.rawPayload, rawPayload);
   assert.match(record.rawPayloadSha256, /^[0-9a-f]{64}$/);
+  assert.equal(verifyPhaseARawEventRecord(record), true);
   const line = encodePhaseARawEventNdjson(record);
   assert.ok(line.endsWith('\n'));
   assert.deepEqual(JSON.parse(line), record);
   assert.equal(Object.isFrozen(record), true);
 });
 
-test('raw event clock semantics cannot claim unavailable exchange time or omit a declared one', () => {
+test('raw event clock semantics cannot claim unavailable exchange time, omit a declared one or invent a semantic type', () => {
   const base = {
     source: 'bitvavo', channel: 'book', sessionId: 'collector-1',
     receivedWallMs: 1, receivedMonoNs: '1', rawPayload: '{}',
@@ -47,6 +50,20 @@ test('raw event clock semantics cannot claim unavailable exchange time or omit a
   assert.throws(() => createPhaseARawEventRecord({
     ...base, exchangeEventTimeSemantics: 'last_transaction',
   }), /is required/);
+  assert.throws(() => createPhaseARawEventRecord({
+    ...base, exchangeEventTimeSemantics: 'invented_semantics' as never,
+  }), /not supported/);
+});
+
+test('forged raw payload digests cannot be emitted as valid NDJSON evidence', () => {
+  const record = createPhaseARawEventRecord({
+    source: 'bitvavo', channel: 'ticker', sessionId: 'collector-1',
+    receivedWallMs: 1, receivedMonoNs: '1', rawPayload: '{"x":1}',
+    exchangeEventTimeSemantics: 'not_available',
+  });
+  const forged = { ...record, rawPayloadSha256: '0'.repeat(64) };
+  assert.equal(verifyPhaseARawEventRecord(forged), false);
+  assert.throws(() => encodePhaseARawEventNdjson(forged), /integrity validation/);
 });
 
 test('config hash is deterministic for semantically identical object key order', () => {
@@ -79,6 +96,34 @@ test('finalized evidence is immutable, stable and detects post-finalization tamp
   const tampered = JSON.parse(JSON.stringify(envelope)) as PhaseAEvidenceEnvelope;
   (tampered.body as Record<string, unknown>).deviationBps = -5;
   assert.equal(verifyPhaseAEvidenceEnvelope(tampered), false);
+});
+
+test('runtime semantic validation rejects an unsupported evidence kind even with a recomputed matching hash', () => {
+  const configHash = hashPhaseAConfig({ triggerBps: 10 });
+  assert.throws(() => finalizePhaseAEvidenceEnvelope({
+    cohortId: 'cohort',
+    episodeId: 'episode',
+    kind: 'invented_kind' as never,
+    collectorCommitSha: '068109fc7ec0e75719445c359ba94f47f0af3b8e',
+    configHash,
+    createdAtUtc: '2026-09-13T10:00:00.000Z',
+    body: { direction: 'control' },
+  }), /supported Phase-A evidence kind/);
+
+  const valid = finalizePhaseAEvidenceEnvelope({
+    cohortId: 'cohort',
+    episodeId: 'episode',
+    kind: 'background_control',
+    collectorCommitSha: '068109fc7ec0e75719445c359ba94f47f0af3b8e',
+    configHash,
+    createdAtUtc: '2026-09-13T10:00:00.000Z',
+    body: { direction: 'control' },
+  });
+  const { contentHash: _oldHash, ...withoutHash } = JSON.parse(JSON.stringify(valid)) as PhaseAEvidenceEnvelope;
+  const invalidWithoutHash = { ...withoutHash, kind: 'invented_kind' };
+  const contentHash = createHash('sha256').update(canonicalPhaseAJson(invalidWithoutHash), 'utf8').digest('hex');
+  const forged = { ...invalidWithoutHash, contentHash } as unknown as PhaseAEvidenceEnvelope;
+  assert.equal(verifyPhaseAEvidenceEnvelope(forged), false);
 });
 
 test('forbidden predictedEdge cannot enter the Phase-A envelope at any nesting depth', () => {
