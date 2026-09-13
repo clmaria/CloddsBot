@@ -27,14 +27,39 @@ function validateMarketInput(input: MarketConstraintsInput): void {
   }
 }
 
+/**
+ * Division by a small lot step can turn an exact decimal multiple into a value
+ * such as 999999.9999999999 or 1000000.0000000001. A fixed epsilon is too small
+ * at large quotients and may add/drop a whole executable step. Snap only when
+ * the quotient is within a scale-aware floating-point tolerance of an integer.
+ */
+function snapNearInteger(quotient: number): number {
+  if (!Number.isFinite(quotient)) throw new Error('step quotient is not finite');
+  const nearest = Math.round(quotient);
+  const tolerance = Math.max(
+    1e-12,
+    Number.EPSILON * Math.max(1, Math.abs(quotient)) * 8,
+  );
+  return Math.abs(quotient - nearest) <= tolerance ? nearest : quotient;
+}
+
 function ceilToStep(value: number, step?: number): number {
   if (step === undefined) return value;
-  return Math.ceil(value / step - 1e-12) * step;
+  return Math.ceil(snapNearInteger(value / step)) * step;
 }
 
 function floorToStep(value: number, step?: number): number {
   if (step === undefined) return value;
-  return Math.floor(value / step + 1e-12) * step;
+  return Math.floor(snapNearInteger(value / step)) * step;
+}
+
+function normalizeRemainder(value: number, step?: number): number {
+  if (!Number.isFinite(value)) throw new Error('remainder is not finite');
+  if (value <= 0) return 0;
+  const tolerance = step === undefined
+    ? 1e-12
+    : Math.max(1e-12, Math.abs(step) * 1e-9);
+  return value <= tolerance ? 0 : value;
 }
 
 export function deriveMarketConstraints(input: MarketConstraintsInput): MarketConstraints {
@@ -50,12 +75,18 @@ export function deriveMarketConstraints(input: MarketConstraintsInput): MarketCo
   const quoteNotional = input.minQuoteNotional ?? 0;
 
   let bindingConstraint: BindingConstraint = 'none';
-  const eps = 1e-9;
-  if (baseRounded > 0 && quoteBaseRounded > 0 && Math.abs(baseRounded - quoteBaseRounded) <= eps) {
+  const bindingTolerance = Math.max(
+    1e-12,
+    input.stepSize !== undefined ? input.stepSize * 1e-6 : 1e-12,
+  );
+  if (
+    baseRounded > 0 && quoteBaseRounded > 0 &&
+    Math.abs(baseRounded - quoteBaseRounded) <= bindingTolerance
+  ) {
     bindingConstraint = 'both';
-  } else if (baseRounded > quoteBaseRounded + eps) {
+  } else if (baseRounded > quoteBaseRounded + bindingTolerance) {
     bindingConstraint = 'base';
-  } else if (quoteBaseRounded > baseRounded + eps) {
+  } else if (quoteBaseRounded > baseRounded + bindingTolerance) {
     bindingConstraint = 'quote';
   } else if (baseRounded > 0) {
     bindingConstraint = 'base';
@@ -102,13 +133,15 @@ export function calculateReducibility(
       minExecutableNotional: constraints.minExecutableNotional,
       totalExitSlices: 0,
       discretionaryPartialExits: 0,
-      remainderBaseQty: sellable,
+      remainderBaseQty: normalizeRemainder(sellable, constraints.stepSize),
       bindingConstraint: constraints.bindingConstraint,
     };
   }
 
-  const fullSlices = Math.floor(sellable / minQty + 1e-12);
-  const remainderBaseQty = Math.max(0, sellable - fullSlices * minQty);
+  const sliceQuotient = snapNearInteger(sellable / minQty);
+  const fullSlices = Math.floor(sliceQuotient);
+  const rawRemainder = sellable - fullSlices * minQty;
+  const remainderBaseQty = normalizeRemainder(rawRemainder, constraints.stepSize);
 
   // The final exit must absorb any residual quantity. Therefore the number of
   // genuinely discretionary partial reductions is one less than the total
