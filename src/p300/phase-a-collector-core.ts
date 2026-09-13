@@ -1,5 +1,6 @@
 import {
   CausalMarketBuffer,
+  type CausalAsOfSnapshot,
   type CausalMarketBufferConfig,
   type CausalMarketEvent,
   type CausalMarketEventInput,
@@ -103,10 +104,11 @@ function isReferenceStream(input: CausalMarketEventInput): boolean {
 /**
  * Pure composition layer for the frozen Phase-A direct-USDC cohort.
  *
- * It receives already parsed public reference events plus already aligned
- * Bitvavo targets. It owns no socket, credential, account state or execution
- * path. The underlying CausalMarketBuffer remains the sole authority for
- * at-or-before selection, freshness, receive skew and reference dispersion.
+ * This class is the owner of the one CausalMarketBuffer for a collector
+ * session. Feed adapters ingest through it and horizon readers seal through
+ * it; callers must not construct a parallel market-state buffer for the same
+ * session. Wall/exchange timestamps remain provenance-only in the underlying
+ * causal buffer.
  */
 export class PhaseACollectorCore {
   private readonly buffer: CausalMarketBuffer;
@@ -126,6 +128,10 @@ export class PhaseACollectorCore {
 
   get sessionId(): string {
     return this.buffer.sessionId;
+  }
+
+  get ingestSeq(): number {
+    return this.buffer.ingestSeq;
   }
 
   ingestReference(input: CausalMarketEventInput): CausalMarketEvent {
@@ -148,6 +154,15 @@ export class PhaseACollectorCore {
   /** Rebuild an old target snapshot without permitting later arrivals to backfill it. */
   snapshotForTarget(targetEvent: CausalMarketEvent): CausalSnapshot {
     return this.buffer.snapshotForTarget(targetEvent);
+  }
+
+  /**
+   * Seal a preregistered monotonic horizon through the same causal authority
+   * that owns ingestion. This is deliberately read-only: no second buffer,
+   * replay cache or wall-clock lookup is introduced here.
+   */
+  snapshotAsOf(cutoffMonoNs: string, nowMonoNs: string): CausalAsOfSnapshot {
+    return this.buffer.snapshotAsOf(cutoffMonoNs, nowMonoNs);
   }
 
   /** New process/clock domain: all old histories and target handles become invalid. */
