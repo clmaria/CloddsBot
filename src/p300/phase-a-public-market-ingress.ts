@@ -49,11 +49,6 @@ export type PhaseAPublicMarketIngressResult =
       target?: PhaseATargetSnapshotResult;
     }>;
 
-interface BufferedBitvavoUpdate {
-  update: BitvavoBookUpdateLike;
-  stamp: PhaseAReceiveStamp;
-}
-
 function parseMonoNs(value: unknown): bigint {
   if (typeof value !== 'string' || !/^\d+$/.test(value)) {
     throw new Error('receivedMonoNs must be a precision-safe integer nanosecond string');
@@ -84,10 +79,10 @@ function errorMessage(error: unknown): string {
  */
 export class PhaseAPublicMarketIngress {
   private readonly collector: PhaseACollectorCore;
-  private readonly targetCoordinator = new PhaseATargetCoordinator();
+  private targetCoordinator = new PhaseATargetCoordinator();
   private readonly maxBufferedBitvavoUpdates: number;
   private bitvavoBook?: BitvavoLocalBookState;
-  private bufferedBitvavoUpdates: BufferedBitvavoUpdate[] = [];
+  private bufferedBitvavoUpdates: BitvavoBookUpdateLike[] = [];
   private lastObservedMonoNs?: bigint;
 
   constructor(collector: PhaseACollectorCore, config: PhaseAPublicMarketIngressConfig) {
@@ -139,18 +134,9 @@ export class PhaseAPublicMarketIngress {
     if (!parsed) return Object.freeze({ kind: 'ignored' });
 
     if (parsed.kind === 'snapshot') {
+      let state: BitvavoLocalBookState;
       try {
-        const state = synchronizeBitvavoBook(
-          parsed.snapshot,
-          this.bufferedBitvavoUpdates.map((item) => item.update),
-        );
-        // A buffered reconstruction only becomes knowable when this snapshot
-        // is received and validated. Never backdate it to an earlier update.
-        this.bitvavoBook = state;
-        this.bufferedBitvavoUpdates = [];
-        const actionable = this.targetCoordinator.updateBookState(state, parsed.stamp);
-        const target = actionable ? this.collector.ingestActionableTarget(actionable) : undefined;
-        return Object.freeze({ kind: 'bitvavo_book_ready', bookNonce: state.nonce, target });
+        state = synchronizeBitvavoBook(parsed.snapshot, this.bufferedBitvavoUpdates);
       } catch (error) {
         this.bitvavoBook = undefined;
         this.targetCoordinator.invalidateBook();
@@ -161,10 +147,23 @@ export class PhaseAPublicMarketIngress {
           needsSnapshot: true,
         });
       }
+
+      // A buffered reconstruction only becomes knowable when this snapshot is
+      // received and validated. Never backdate it to an earlier update.
+      this.bitvavoBook = state;
+      this.bufferedBitvavoUpdates = [];
+      try {
+        const actionable = this.targetCoordinator.updateBookState(state, parsed.stamp);
+        const target = actionable ? this.collector.ingestActionableTarget(actionable) : undefined;
+        return Object.freeze({ kind: 'bitvavo_book_ready', bookNonce: state.nonce, target });
+      } catch (error) {
+        this.invalidateBitvavoTransportState();
+        throw error;
+      }
     }
 
     if (!this.bitvavoBook) {
-      this.bufferBitvavoUpdate(parsed.update, parsed.stamp);
+      this.bufferBitvavoUpdate(parsed.update);
       return Object.freeze({
         kind: 'bitvavo_book_buffered',
         bufferedUpdates: this.bufferedBitvavoUpdates.length,
@@ -178,7 +177,7 @@ export class PhaseAPublicMarketIngress {
       this.bitvavoBook = undefined;
       this.targetCoordinator.invalidateBook();
       this.bufferedBitvavoUpdates = [];
-      this.bufferBitvavoUpdate(parsed.update, parsed.stamp);
+      this.bufferBitvavoUpdate(parsed.update);
       return Object.freeze({
         kind: 'bitvavo_book_resync_required',
         reason: `expected Bitvavo nonce ${expectedNonce}, received ${receivedNonce}`,
@@ -188,34 +187,48 @@ export class PhaseAPublicMarketIngress {
     }
 
     // Non-sequence corruption (crossed/empty/malformed state) is not silently
-    // converted into a retry loop. Invalidate first, then surface the error.
+    // converted into a retry loop. Invalidate all Bitvavo inputs, then surface
+    // the error so an operator cannot mistake corrupt data for a normal gap.
     let state: BitvavoLocalBookState;
     try {
       state = applyBitvavoBookUpdate(this.bitvavoBook, parsed.update);
     } catch (error) {
-      this.bitvavoBook = undefined;
-      this.bufferedBitvavoUpdates = [];
-      this.targetCoordinator.invalidateBook();
+      this.invalidateBitvavoTransportState();
       throw error;
     }
 
     this.bitvavoBook = state;
-    const actionable = this.targetCoordinator.updateBookState(state, parsed.stamp);
-    const target = actionable ? this.collector.ingestActionableTarget(actionable) : undefined;
-    return Object.freeze({ kind: 'bitvavo_book_ready', bookNonce: state.nonce, target });
+    try {
+      const actionable = this.targetCoordinator.updateBookState(state, parsed.stamp);
+      const target = actionable ? this.collector.ingestActionableTarget(actionable) : undefined;
+      return Object.freeze({ kind: 'bitvavo_book_ready', bookNonce: state.nonce, target });
+    } catch (error) {
+      this.invalidateBitvavoTransportState();
+      throw error;
+    }
   }
 
-  /** Transport disconnect/gap: discard unverifiable local state and start fresh. */
+  /** Book continuity gap only: keep the latest ticker but require a fresh book. */
   invalidateBitvavoBook(): void {
     this.bitvavoBook = undefined;
     this.bufferedBitvavoUpdates = [];
     this.targetCoordinator.invalidateBook();
   }
 
+  /**
+   * Socket disconnect/reconnect: both Bitvavo inputs are stale. Preserve the
+   * process-wide receive clock, but clear book, ticker and emission identity.
+   */
+  invalidateBitvavoTransportState(): void {
+    this.bitvavoBook = undefined;
+    this.bufferedBitvavoUpdates = [];
+    this.targetCoordinator = new PhaseATargetCoordinator();
+  }
+
   /** New process/clock domain invalidates every retained causal handle. */
   resetForNewClockDomain(newSessionId: string): void {
     this.collector.resetSession(newSessionId);
-    this.targetCoordinator.resetForNewClockDomain();
+    this.targetCoordinator = new PhaseATargetCoordinator();
     this.bitvavoBook = undefined;
     this.bufferedBitvavoUpdates = [];
     this.lastObservedMonoNs = undefined;
@@ -230,13 +243,11 @@ export class PhaseAPublicMarketIngress {
     this.lastObservedMonoNs = mono;
   }
 
-  private bufferBitvavoUpdate(update: BitvavoBookUpdateLike, stamp: PhaseAReceiveStamp): void {
+  private bufferBitvavoUpdate(update: BitvavoBookUpdateLike): void {
     if (this.bufferedBitvavoUpdates.length >= this.maxBufferedBitvavoUpdates) {
-      this.bufferedBitvavoUpdates = [];
-      this.bitvavoBook = undefined;
-      this.targetCoordinator.invalidateBook();
+      this.invalidateBitvavoTransportState();
       throw new Error('Bitvavo pre-snapshot update buffer exceeded configured bound; reconnect and resync');
     }
-    this.bufferedBitvavoUpdates.push({ update, stamp: { ...stamp } });
+    this.bufferedBitvavoUpdates.push(update);
   }
 }
