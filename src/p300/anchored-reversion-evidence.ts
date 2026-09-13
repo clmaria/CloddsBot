@@ -3,18 +3,22 @@ import { evaluateOrderBookEconomics, type OrderBookEconomics, type OrderBookSnap
 export type DislocationDirection = 'underpriced' | 'overpriced' | 'flat';
 
 export interface NormalizedReferenceInput {
-  /** Unique source label, e.g. kraken-btc-usd. */
+  /** Unique source label, e.g. coinbase-btc-usdc. */
   source: string;
-  /** Source price before quote conversion. */
+  /** Source price before optional quote conversion. */
   sourcePrice: number;
   /** Multiply sourcePrice by this value to express it in the target quote asset. */
   sourceQuoteToTargetQuote: number;
-  /** Exchange/event timestamp for the source price, in epoch milliseconds. */
-  priceObservedAtMs: number;
-  /** Timestamp of the quote-conversion observation, in epoch milliseconds. */
-  conversionObservedAtMs: number;
-  /** Local wall-clock receive timestamp used to measure transport skew. */
+  /** Optional exchange/event timestamp retained as provenance when semantics are known. */
+  priceObservedAtMs?: number;
+  /** Optional timestamp for a separate quote-conversion observation. */
+  conversionObservedAtMs?: number;
+  /** Local wall-clock receive time for audit/log correlation. */
   receivedAtMs: number;
+  /** Same-process monotonic receive clock, stored precision-safe as integer nanoseconds. */
+  receivedMonoNs: string;
+  /** Identifies the process/session whose monotonic clock produced receivedMonoNs. */
+  clockDomain: string;
 }
 
 export interface SynchronizedTargetBook {
@@ -23,13 +27,22 @@ export interface SynchronizedTargetBook {
   sequence: number;
   /** Keep the original nanosecond value as text when the venue provides one. */
   exchangeTimestampNs?: string;
-  exchangeObservedAtMs: number;
+  /** Optional exchange event time only when its semantics match this target state. */
+  exchangeObservedAtMs?: number;
+  /** Local wall-clock receive time for audit/log correlation. */
   receivedAtMs: number;
+  /** Same-process monotonic receive clock for ordering/freshness/skew. */
+  receivedMonoNs: string;
+  /** Identifies the process/session whose monotonic clock produced receivedMonoNs. */
+  clockDomain: string;
   book: OrderBookSnapshot;
 }
 
 export interface AnchoredReversionConfig {
+  /** Local wall-clock now, retained for audit/sanity only. */
   nowMs: number;
+  /** Same-process monotonic now used for data age and cross-feed timing. */
+  nowMonoNs: string;
   quoteTicket: number;
   minReferenceSources: number;
   maxDataAgeMs: number;
@@ -42,9 +55,11 @@ export interface AnchoredReversionConfig {
 export interface ReferenceComponent {
   source: string;
   normalizedPrice: number;
-  priceObservedAtMs: number;
-  conversionObservedAtMs: number;
+  priceObservedAtMs?: number;
+  conversionObservedAtMs?: number;
   receivedAtMs: number;
+  receivedMonoNs: string;
+  clockDomain: string;
 }
 
 export interface AnchoredReversionObservation {
@@ -52,7 +67,12 @@ export interface AnchoredReversionObservation {
   symbol: string;
   targetSequence: number;
   targetExchangeTimestampNs?: string;
+  targetExchangeObservedAtMs?: number;
+  targetReceivedAtMs: number;
+  targetReceivedMonoNs: string;
+  clockDomain: string;
   observedAtMs: number;
+  observedMonoNs: string;
   quoteTicket: number;
   targetMid: number;
   referencePrice: number;
@@ -75,10 +95,48 @@ function assertNonNegativeFinite(value: number, label: string): void {
   if (!(Number.isFinite(value) && value >= 0)) throw new Error(`${label} must be non-negative and finite`);
 }
 
-function validateTimestamp(value: number, nowMs: number, maxAgeMs: number, maxFutureSkewMs: number, label: string): void {
+function parseMonoNs(value: unknown, label: string): bigint {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    throw new Error(`${label} must be a precision-safe integer nanosecond string`);
+  }
+  return BigInt(value);
+}
+
+function msToNs(valueMs: number, label: string): bigint {
+  assertNonNegativeFinite(valueMs, label);
+  const ns = valueMs * 1_000_000;
+  if (!Number.isSafeInteger(ns)) throw new Error(`${label} is too large for safe nanosecond conversion`);
+  return BigInt(ns);
+}
+
+function validateWallClock(value: number, nowMs: number, maxFutureSkewMs: number, label: string): void {
   assertPositiveFinite(value, label);
   if (value > nowMs + maxFutureSkewMs) throw new Error(`${label} is future-dated`);
-  if (nowMs - value > maxAgeMs) throw new Error(`${label} is stale`);
+}
+
+function validateOptionalExchangeTime(
+  value: number | undefined,
+  nowMs: number,
+  maxFutureSkewMs: number,
+  label: string,
+): void {
+  if (value === undefined) return;
+  validateWallClock(value, nowMs, maxFutureSkewMs, label);
+}
+
+function validateReceiveClocks(
+  receivedAtMs: number,
+  receivedMonoNs: string,
+  config: AnchoredReversionConfig,
+  label: string,
+): bigint {
+  validateWallClock(receivedAtMs, config.nowMs, config.maxFutureSkewMs, `${label} wall receive timestamp`);
+  const nowMonoNs = parseMonoNs(config.nowMonoNs, 'nowMonoNs');
+  const receiveMonoNs = parseMonoNs(receivedMonoNs, `${label} receivedMonoNs`);
+  if (receiveMonoNs > nowMonoNs) throw new Error(`${label} monotonic receive timestamp is future-dated`);
+  const maxAgeNs = msToNs(config.maxDataAgeMs, 'maxDataAgeMs');
+  if (nowMonoNs - receiveMonoNs > maxAgeNs) throw new Error(`${label} monotonic receive timestamp is stale`);
+  return receiveMonoNs;
 }
 
 function median(values: number[]): number {
@@ -92,7 +150,8 @@ function median(values: number[]): number {
 function normalizeReferences(
   references: NormalizedReferenceInput[],
   config: AnchoredReversionConfig,
-): { components: ReferenceComponent[]; referencePrice: number; dispersionBps: number } {
+  expectedClockDomain: string,
+): { components: ReferenceComponent[]; referencePrice: number; dispersionBps: number; receiveMonoNs: bigint[] } {
   if (!Number.isInteger(config.minReferenceSources) || config.minReferenceSources < 2) {
     throw new Error('minReferenceSources must be an integer >= 2');
   }
@@ -101,17 +160,23 @@ function normalizeReferences(
   }
 
   const sources = new Set<string>();
+  const receiveMonoNs: bigint[] = [];
   const components = references.map((reference) => {
     const source = reference.source.trim();
     if (!source) throw new Error('reference source is required');
     if (sources.has(source)) throw new Error('duplicate reference source');
     sources.add(source);
 
+    const clockDomain = reference.clockDomain.trim();
+    if (!clockDomain) throw new Error('reference clockDomain is required');
+    if (clockDomain !== expectedClockDomain) throw new Error('mixed monotonic clock domains');
+
     assertPositiveFinite(reference.sourcePrice, 'reference sourcePrice');
     assertPositiveFinite(reference.sourceQuoteToTargetQuote, 'reference quote conversion');
-    validateTimestamp(reference.priceObservedAtMs, config.nowMs, config.maxDataAgeMs, config.maxFutureSkewMs, 'reference price timestamp');
-    validateTimestamp(reference.conversionObservedAtMs, config.nowMs, config.maxDataAgeMs, config.maxFutureSkewMs, 'reference conversion timestamp');
-    validateTimestamp(reference.receivedAtMs, config.nowMs, config.maxDataAgeMs, config.maxFutureSkewMs, 'reference receive timestamp');
+    validateOptionalExchangeTime(reference.priceObservedAtMs, config.nowMs, config.maxFutureSkewMs, 'reference price timestamp');
+    validateOptionalExchangeTime(reference.conversionObservedAtMs, config.nowMs, config.maxFutureSkewMs, 'reference conversion timestamp');
+    const receivedMono = validateReceiveClocks(reference.receivedAtMs, reference.receivedMonoNs, config, 'reference');
+    receiveMonoNs.push(receivedMono);
 
     const normalizedPrice = reference.sourcePrice * reference.sourceQuoteToTargetQuote;
     assertPositiveFinite(normalizedPrice, 'normalized reference price');
@@ -122,6 +187,8 @@ function normalizeReferences(
       priceObservedAtMs: reference.priceObservedAtMs,
       conversionObservedAtMs: reference.conversionObservedAtMs,
       receivedAtMs: reference.receivedAtMs,
+      receivedMonoNs: reference.receivedMonoNs,
+      clockDomain,
     };
   });
 
@@ -135,7 +202,7 @@ function normalizeReferences(
     throw new Error('reference sources disagree beyond allowed dispersion');
   }
 
-  return { components, referencePrice, dispersionBps };
+  return { components, referencePrice, dispersionBps, receiveMonoNs };
 }
 
 export function calculateOrderBookImbalance(book: OrderBookSnapshot, levels: number): number {
@@ -167,8 +234,8 @@ export function calculateOrderBookImbalance(book: OrderBookSnapshot, levels: num
 
 /**
  * Builds a read-only research observation. It has no exchange client and no
- * order-submission capability. The caller must provide a synchronized target
- * book and independently observed/normalized reference inputs.
+ * order-submission capability. Timing validity is based on same-process local
+ * monotonic receive clocks; exchange timestamps are optional provenance only.
  */
 export function buildAnchoredReversionObservation(
   target: SynchronizedTargetBook,
@@ -176,6 +243,7 @@ export function buildAnchoredReversionObservation(
   config: AnchoredReversionConfig,
 ): AnchoredReversionObservation {
   assertPositiveFinite(config.nowMs, 'nowMs');
+  parseMonoNs(config.nowMonoNs, 'nowMonoNs');
   assertPositiveFinite(config.quoteTicket, 'quoteTicket');
   assertPositiveFinite(config.maxDataAgeMs, 'maxDataAgeMs');
   assertNonNegativeFinite(config.maxFutureSkewMs, 'maxFutureSkewMs');
@@ -190,15 +258,19 @@ export function buildAnchoredReversionObservation(
   if (target.exchangeTimestampNs !== undefined && !/^\d+$/.test(target.exchangeTimestampNs)) {
     throw new Error('target exchangeTimestampNs must be an integer string');
   }
+  validateOptionalExchangeTime(target.exchangeObservedAtMs, config.nowMs, config.maxFutureSkewMs, 'target exchange timestamp');
 
-  validateTimestamp(target.exchangeObservedAtMs, config.nowMs, config.maxDataAgeMs, config.maxFutureSkewMs, 'target exchange timestamp');
-  validateTimestamp(target.receivedAtMs, config.nowMs, config.maxDataAgeMs, config.maxFutureSkewMs, 'target receive timestamp');
+  const clockDomain = target.clockDomain.trim();
+  if (!clockDomain) throw new Error('target clockDomain is required');
+  const targetReceiveMonoNs = validateReceiveClocks(target.receivedAtMs, target.receivedMonoNs, config, 'target');
 
-  const normalized = normalizeReferences(references, config);
-  const receiveTimes = [target.receivedAtMs, ...normalized.components.map((component) => component.receivedAtMs)];
-  const receiveSkew = Math.max(...receiveTimes) - Math.min(...receiveTimes);
-  if (receiveSkew > config.maxCrossFeedReceiveSkewMs) {
-    throw new Error('cross-feed receive skew exceeds allowed maximum');
+  const normalized = normalizeReferences(references, config, clockDomain);
+  const receiveTimes = [targetReceiveMonoNs, ...normalized.receiveMonoNs];
+  const minReceive = receiveTimes.reduce((min, value) => value < min ? value : min);
+  const maxReceive = receiveTimes.reduce((max, value) => value > max ? value : max);
+  const maxReceiveSkewNs = msToNs(config.maxCrossFeedReceiveSkewMs, 'maxCrossFeedReceiveSkewMs');
+  if (maxReceive - minReceive > maxReceiveSkewNs) {
+    throw new Error('cross-feed monotonic receive skew exceeds allowed maximum');
   }
 
   const economics = evaluateOrderBookEconomics(target.book, config.quoteTicket);
@@ -223,7 +295,12 @@ export function buildAnchoredReversionObservation(
     symbol: target.symbol,
     targetSequence: target.sequence,
     targetExchangeTimestampNs: target.exchangeTimestampNs,
+    targetExchangeObservedAtMs: target.exchangeObservedAtMs,
+    targetReceivedAtMs: target.receivedAtMs,
+    targetReceivedMonoNs: target.receivedMonoNs,
+    clockDomain,
     observedAtMs: config.nowMs,
+    observedMonoNs: config.nowMonoNs,
     quoteTicket: config.quoteTicket,
     targetMid: economics.mid,
     referencePrice: normalized.referencePrice,
