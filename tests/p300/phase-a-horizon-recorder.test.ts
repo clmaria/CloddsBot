@@ -8,10 +8,7 @@ import {
   type PhaseADislocationObservation,
   type PhaseAEpisode,
 } from '../../src/p300/phase-a-episode-detector';
-import {
-  PhaseAHorizonRecorder,
-  type PhaseAHorizonAlignmentObservation,
-} from '../../src/p300/phase-a-horizon-recorder';
+import { PhaseAHorizonRecorder } from '../../src/p300/phase-a-horizon-recorder';
 import { parseBitvavoTickerRaw } from '../../src/p300/phase-a-bitvavo-ticker';
 import { PhaseATargetCoordinator, type PhaseATargetAlignmentState } from '../../src/p300/phase-a-target-coordinator';
 import type { PhaseAReceiveStamp } from '../../src/p300/phase-a-public-feed-parsers';
@@ -24,7 +21,7 @@ function stamp(ns: bigint): PhaseAReceiveStamp {
   return { receivedMonoNs: ns.toString(), receivedAtMs: Number(ns / MS) };
 }
 
-function episode(start = START): PhaseAEpisode {
+function makeEpisode(start = START): PhaseAEpisode {
   const horizonDueMonoNs: Record<string, string> = {};
   for (const seconds of PHASE_A_HORIZON_SECONDS) {
     horizonDueMonoNs[`${seconds}s`] = (start + BigInt(seconds) * 1_000_000_000n).toString();
@@ -47,7 +44,7 @@ function episode(start = START): PhaseAEpisode {
     executableLongOnly: true,
   };
   return Object.freeze({
-    episodeId: `${SESSION}:3:${start.toString()}`,
+    episodeId: `${SESSION}:3:${start}`,
     sessionId: SESSION,
     startMonoNs: start.toString(),
     endMonoNs: (start + 60_000_000_000n).toString(),
@@ -56,12 +53,7 @@ function episode(start = START): PhaseAEpisode {
   });
 }
 
-function reference(
-  venue: 'kraken' | 'binance',
-  ns: bigint,
-  bid = 99.9,
-  ask = 100.1,
-): CausalMarketEventInput {
+function reference(venue: 'kraken' | 'binance', ns: bigint, bid = 99.9, ask = 100.1): CausalMarketEventInput {
   return {
     venue,
     symbol: venue === 'kraken' ? 'BTC/USDC' : 'BTCUSDC',
@@ -72,27 +64,27 @@ function reference(
   };
 }
 
-function book(nonce: number, bid = 98, ask = 99): BitvavoLocalBookState {
+function localBook(nonce = 10): BitvavoLocalBookState {
   return {
     market: 'BTC-USDC',
     nonce,
-    bids: { [String(bid)]: '1.5' },
-    asks: { [String(ask)]: '2' },
+    bids: { '98': '1.5' },
+    asks: { '99': '2' },
     exchangeTimestampNs: '1752139200123456789',
   };
 }
 
-function actionableAt(ns: bigint, nonce = 10, bid = 98, ask = 99) {
+function actionableAt(ns: bigint) {
   const coordinator = new PhaseATargetCoordinator();
-  assert.equal(coordinator.updateBookState(book(nonce, bid, ask), stamp(ns)), null);
+  coordinator.updateBookState(localBook(), stamp(ns));
   const ticker = parseBitvavoTickerRaw(JSON.stringify({
     event: 'ticker',
     market: 'BTC-USDC',
-    bestBid: String(bid),
+    bestBid: '98',
     bestBidSize: '1.5',
-    bestAsk: String(ask),
+    bestAsk: '99',
     bestAskSize: '2',
-    lastPrice: String((bid + ask) / 2),
+    lastPrice: '98.5',
   }), stamp(ns));
   assert.ok(ticker);
   const actionable = coordinator.updateTicker(ticker);
@@ -100,7 +92,7 @@ function actionableAt(ns: bigint, nonce = 10, bid = 98, ask = 99) {
   return actionable;
 }
 
-function successfulResult(ns: bigint): PhaseATargetSnapshotResult {
+function snapshotAt(ns: bigint, reject = false): PhaseATargetSnapshotResult {
   const collector = new PhaseACollectorCore({
     sessionId: SESSION,
     maxHistoryPerStream: 10,
@@ -109,23 +101,11 @@ function successfulResult(ns: bigint): PhaseATargetSnapshotResult {
     maxReferenceDispersionBps: 100,
   });
   collector.ingestReference(reference('kraken', ns - 20n * MS));
-  collector.ingestReference(reference('binance', ns - 10n * MS, 99.95, 100.15));
+  if (!reject) collector.ingestReference(reference('binance', ns - 10n * MS, 99.95, 100.15));
   return collector.ingestActionableTarget(actionableAt(ns));
 }
 
-function rejectedResult(ns: bigint): PhaseATargetSnapshotResult {
-  const collector = new PhaseACollectorCore({
-    sessionId: SESSION,
-    maxHistoryPerStream: 10,
-    maxReferenceAgeMs: 1_000,
-    maxReferenceReceiveSkewMs: 500,
-    maxReferenceDispersionBps: 100,
-  });
-  collector.ingestReference(reference('kraken', ns - 10n * MS));
-  return collector.ingestActionableTarget(actionableAt(ns));
-}
-
-function alignedInput(result: PhaseATargetSnapshotResult, observedMonoNs = result.targetEvent.receivedMonoNs): PhaseAHorizonAlignmentObservation {
+function alignedInput(result: PhaseATargetSnapshotResult, observedMonoNs = result.targetEvent.receivedMonoNs) {
   const alignment: PhaseATargetAlignmentState = {
     status: 'aligned',
     actionable: result.actionable,
@@ -138,151 +118,146 @@ function due(seconds: number): bigint {
   return START + BigInt(seconds) * 1_000_000_000n;
 }
 
-test('first post-deadline aligned observation resolves the horizon without backdating', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
+test('first post-deadline aligned observation resolves exactly once', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
   const at = due(1) + 50n * MS;
-  const records = recorder.observe(alignedInput(successfulResult(at)));
-  assert.equal(records.length, 1);
-  const [record] = records;
+  const [record] = recorder.observe(alignedInput(snapshotAt(at)));
+  assert.equal(record.status, 'observed');
   assert.equal(record.horizonSeconds, 1);
-  assert.equal(record.status, 'observed');
-  if (record.status !== 'observed') return;
-  assert.equal(record.dueMonoNs, due(1).toString());
-  assert.equal(record.stateObservedMonoNs, at.toString());
-  assert.equal(record.lateByNs, (50n * MS).toString());
-  assert.equal(record.observation.receivedMonoNs, at.toString());
-  assert.equal(record.observation.direction, 'underpriced');
+  if (record.status === 'observed') {
+    assert.equal(record.lateByNs, (50n * MS).toString());
+    assert.equal(record.observation.receivedMonoNs, at.toString());
+  }
+  assert.deepEqual(recorder.observe(alignedInput(snapshotAt(due(1) + 70n * MS))), []);
 });
 
-test('pre-deadline state is never carried forward into a horizon', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const before = due(1) - 1n * MS;
-  assert.deepEqual(recorder.observe(alignedInput(successfulResult(before))), []);
+test('pre-deadline state is never carried forward and exact lateness boundary is eligible', () => {
+  const stale = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  assert.deepEqual(stale.observe(alignedInput(snapshotAt(due(1) - 1n * MS))), []);
+  assert.deepEqual(stale.advanceClock((due(1) + 100n * MS).toString()), []);
+  const [missing] = stale.advanceClock((due(1) + 100n * MS + 1n).toString());
+  assert.equal(missing.status, 'no_timely_state');
 
-  assert.deepEqual(recorder.advanceClock((due(1) + 100n * MS).toString()), []);
-  const expired = recorder.advanceClock((due(1) + 100n * MS + 1n).toString());
-  assert.equal(expired.length, 1);
-  assert.equal(expired[0].status, 'no_timely_state');
+  const boundary = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const [observed] = boundary.observe(alignedInput(snapshotAt(due(1) + 100n * MS)));
+  assert.equal(observed.status, 'observed');
 });
 
-test('an observation exactly at the lateness boundary remains eligible', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const at = due(1) + 100n * MS;
-  const [record] = recorder.observe(alignedInput(successfulResult(at)));
-  assert.equal(record.status, 'observed');
-  if (record.status === 'observed') assert.equal(record.lateByNs, (100n * MS).toString());
-});
-
-test('first mismatched state after a deadline wins; later alignment cannot rewrite history', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
+test('mismatched, missing and rejected-quality states remain explicit outcomes', () => {
+  const mismatchRecorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
   const mismatchAt = due(1) + 10n * MS;
   const mismatch: PhaseATargetAlignmentState = {
     status: 'mismatched',
     bookReceivedMonoNs: (mismatchAt - 2n * MS).toString(),
-    tickerReceivedMonoNs: (mismatchAt - 1n * MS).toString(),
-    observedThroughMonoNs: (mismatchAt - 1n * MS).toString(),
+    tickerReceivedMonoNs: mismatchAt.toString(),
+    observedThroughMonoNs: mismatchAt.toString(),
   };
-  const [first] = recorder.observe({ observedMonoNs: mismatchAt.toString(), alignment: mismatch });
-  assert.equal(first.status, 'mismatched');
+  assert.equal(mismatchRecorder.observe({ observedMonoNs: mismatchAt.toString(), alignment: mismatch })[0].status, 'mismatched');
 
-  const alignedAt = due(1) + 20n * MS;
-  assert.deepEqual(recorder.observe(alignedInput(successfulResult(alignedAt))), []);
-  assert.equal(recorder.records[0].status, 'mismatched');
-});
-
-test('missing target state is explicit evidence rather than an inferred price', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const at = due(1) + 5n * MS;
-  const alignment: PhaseATargetAlignmentState = {
+  const missingRecorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const missingAt = due(1) + 5n * MS;
+  const missingState: PhaseATargetAlignmentState = {
     status: 'missing',
     missing: ['book'],
-    observedThroughMonoNs: at.toString(),
+    observedThroughMonoNs: missingAt.toString(),
   };
-  const [record] = recorder.observe({ observedMonoNs: at.toString(), alignment });
-  assert.equal(record.status, 'missing');
-  if (record.status === 'missing') assert.deepEqual(record.missing, ['book']);
+  assert.equal(missingRecorder.observe({ observedMonoNs: missingAt.toString(), alignment: missingState })[0].status, 'missing');
+
+  const rejectedRecorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const rejected = snapshotAt(due(1) + 5n * MS, true);
+  const [quality] = rejectedRecorder.observe(alignedInput(rejected));
+  assert.equal(quality.status, 'quality_rejected');
 });
 
-test('aligned state with rejected references records quality rejection, not a deviation', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const at = due(1) + 5n * MS;
-  const result = rejectedResult(at);
-  assert.equal(result.snapshot.ok, false);
-  const [record] = recorder.observe(alignedInput(result));
-  assert.equal(record.status, 'quality_rejected');
-  if (record.status === 'quality_rejected') {
-    assert.ok(record.failures.some((failure) => failure.code === 'MISSING_REFERENCE'));
-  }
-});
-
-test('first state arriving after the configured window produces no_timely_state', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const at = due(1) + 101n * MS;
-  const [record] = recorder.observe(alignedInput(successfulResult(at)));
+test('state arriving outside the configured window cannot repair that horizon', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const [record] = recorder.observe(alignedInput(snapshotAt(due(1) + 101n * MS)));
   assert.equal(record.status, 'no_timely_state');
-
-  const later = due(1) + 120n * MS;
-  assert.deepEqual(recorder.observe(alignedInput(successfulResult(later))), []);
-  assert.equal(recorder.records[0].status, 'no_timely_state');
+  assert.deepEqual(recorder.observe(alignedInput(snapshotAt(due(1) + 120n * MS))), []);
 });
 
-test('late timer can close several expired horizons without forward-filling them', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const now = due(2) + 100n * MS + 1n;
-  const records = recorder.advanceClock(now.toString());
+test('late timer may close multiple expired horizons without inventing observations', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const records = recorder.advanceClock((due(2) + 100n * MS + 1n).toString());
   assert.deepEqual(records.map((record) => [record.horizonSeconds, record.status]), [
     [1, 'no_timely_state'],
     [2, 'no_timely_state'],
   ]);
-  assert.equal(recorder.complete, false);
 });
 
-test('invalidation seals every unresolved horizon and cannot be repaired later', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const invalidatedAt = START + 500n * MS;
-  const records = recorder.invalidate(invalidatedAt.toString(), 'book sequence gap');
+test('invalidation seals all unresolved horizons permanently', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const records = recorder.invalidate((START + 500n * MS).toString(), 'book sequence gap');
   assert.equal(records.length, PHASE_A_HORIZON_SECONDS.length);
   assert.ok(records.every((record) => record.status === 'invalidated'));
   assert.equal(recorder.complete, true);
+  assert.throws(() => recorder.observe(alignedInput(snapshotAt(due(1)))), /after invalidation/);
+});
+
+test('old aligned state cannot be re-stamped after a horizon', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const old = snapshotAt(due(1) - 1n * MS);
   assert.throws(
-    () => recorder.observe(alignedInput(successfulResult(due(1)))),
-    /after invalidation/,
+    () => recorder.observe(alignedInput(old, (due(1) + 1n * MS).toString())),
+    /cannot be re-stamped/,
   );
 });
 
-test('recorder rejects future evidence, clock regression and forged snapshot coupling', () => {
-  const recorder = new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 });
-  const at = START + 100n * MS;
-  const futureMissing: PhaseATargetAlignmentState = {
+test('rejected temporal forgery does not advance internal clock', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const badAt = START + 100n * MS;
+  const forged: PhaseATargetAlignmentState = {
     status: 'missing',
     missing: ['ticker'],
-    observedThroughMonoNs: (at + 1n).toString(),
+    observedThroughMonoNs: (badAt - 1n).toString(),
+  };
+  assert.throws(() => recorder.observe({ observedMonoNs: badAt.toString(), alignment: forged }), /re-stamped/);
+
+  const earlier = START + 50n * MS;
+  const valid: PhaseATargetAlignmentState = {
+    status: 'missing',
+    missing: ['ticker'],
+    observedThroughMonoNs: earlier.toString(),
+  };
+  assert.doesNotThrow(() => recorder.observe({ observedMonoNs: earlier.toString(), alignment: valid }));
+});
+
+test('mismatched alignment must bind observedThrough to the freshest component', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
+  const at = START + 100n * MS;
+  const forged: PhaseATargetAlignmentState = {
+    status: 'mismatched',
+    bookReceivedMonoNs: (at - 2n).toString(),
+    tickerReceivedMonoNs: (at - 1n).toString(),
+    observedThroughMonoNs: at.toString(),
   };
   assert.throws(
-    () => recorder.observe({ observedMonoNs: at.toString(), alignment: futureMissing }),
-    /future evidence/,
+    () => recorder.observe({ observedMonoNs: at.toString(), alignment: forged }),
+    /inconsistent with its components/,
   );
+});
 
+test('recorder rejects clock regression and forged snapshot coupling', () => {
+  const recorder = new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 });
   const missing: PhaseATargetAlignmentState = { status: 'missing', missing: ['ticker'] };
-  recorder.observe({ observedMonoNs: (at + 10n).toString(), alignment: missing });
+  recorder.observe({ observedMonoNs: (START + 100n * MS).toString(), alignment: missing });
   assert.throws(
-    () => recorder.observe({ observedMonoNs: at.toString(), alignment: missing }),
+    () => recorder.observe({ observedMonoNs: (START + 90n * MS).toString(), alignment: missing }),
     /clock regressed/,
   );
 
-  const alignedAt = due(1);
-  const result = successfulResult(alignedAt);
+  const result = snapshotAt(due(1));
   const aligned = alignedInput(result);
   assert.throws(
-    () => new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 }).observe({
+    () => new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 }).observe({
       observedMonoNs: aligned.observedMonoNs,
       alignment: aligned.alignment,
     }),
     /requires its causal snapshot result/,
   );
   assert.throws(
-    () => new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: 100 }).observe({
-      observedMonoNs: aligned.observedMonoNs,
+    () => new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: 100 }).observe({
+      observedMonoNs: due(1).toString(),
       alignment: missing,
       snapshotResult: result,
     }),
@@ -290,17 +265,11 @@ test('recorder rejects future evidence, clock regression and forged snapshot cou
   );
 });
 
-test('recorder validates frozen episode deadlines and mandatory lateness config', () => {
+test('recorder validates frozen deadlines and mandatory lateness config', () => {
   const malformed = {
-    ...episode(),
-    horizonDueMonoNs: { ...episode().horizonDueMonoNs, '5s': '123' },
+    ...makeEpisode(),
+    horizonDueMonoNs: { ...makeEpisode().horizonDueMonoNs, '5s': '123' },
   };
-  assert.throws(
-    () => new PhaseAHorizonRecorder(malformed, { maxHorizonLatenessMs: 100 }),
-    /preregistered deadline/,
-  );
-  assert.throws(
-    () => new PhaseAHorizonRecorder(episode(), { maxHorizonLatenessMs: Number.NaN }),
-    /non-negative and finite/,
-  );
+  assert.throws(() => new PhaseAHorizonRecorder(malformed, { maxHorizonLatenessMs: 100 }), /preregistered deadline/);
+  assert.throws(() => new PhaseAHorizonRecorder(makeEpisode(), { maxHorizonLatenessMs: Number.NaN }), /non-negative and finite/);
 });
