@@ -11,6 +11,7 @@ This ledger exists to prevent infrastructure work from quietly becoming an unlim
 - Historical work before this ledger is not treated as zero; it remains explicitly marked for conservative reconciliation.
 - If exact timing is unavailable, record conservative blocks rather than estimating downward.
 - Reaching the budget forces a GO / PAUSE / KILL decision. PAUSE means archived: no background scanner, live keys or recurring maintenance.
+- Estimated blocks are conservative accounting units, not claims about exact wall-clock elapsed time.
 
 ## Ledger
 
@@ -22,7 +23,11 @@ This ledger exists to prevent infrastructure work from quietly becoming an unlim
 | 2026-09-12 | Venue/economics evidence: MiCA gate, fee baselines, effective-hurdle refactor and MVE sensitivity | 0.5 h | ESTIMATED |
 | 2026-09-12 | Microstructure methodology: order-book economics, multi-venue normalization, evidence consistency, adapter-readiness and lexicographic venue gate | 0.5 h | ESTIMATED |
 | 2026-09-12 | Adversarial hardening: NaN/Infinity fail-closed controls, sell-side fixed-base correction, fillable-only slippage statistics, venue-gate revalidation | 0.5 h | ESTIMATED |
+| 2026-09-13 | Clodds capability audit; Binance Spot/Futures correction; Edge Thesis shortlist; Bitvavo BTC-USDC economics and long-only constraint | 0.5 h | ESTIMATED |
+| 2026-09-13 | Precision-safe Bitvavo sync, conservative maker-fill model, bounded active window and public-evidence collector design | 0.5 h | ESTIMATED |
 
 ## Remaining budget
 
-Cannot be stated honestly until the historical block is reconciled. It must not be reported as 17.5 h remaining.
+Cannot be stated honestly until the historical block is reconciled. It must not be reported as a numeric remaining-hour balance yet.
+
+The explicit post-ledger charges above total **3.5 h estimated**, but this is not the same thing as saying 16.5 h remain because the pre-ledger historical block is unresolved.
