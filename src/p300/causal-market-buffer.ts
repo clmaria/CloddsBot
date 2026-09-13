@@ -63,6 +63,14 @@ export interface CausalSnapshotRejected {
 
 export type CausalSnapshot = CausalSnapshotSuccess | CausalSnapshotRejected;
 
+/** A point-in-time snapshot sealed against the buffer's current ingest boundary. */
+export interface CausalAsOfSnapshot {
+  cutoffMonoNs: string;
+  sealedAtMonoNs: string;
+  cutoffIngestSeq: number;
+  snapshot: CausalSnapshot;
+}
+
 function normalizeText(value: string, label: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${label} is required`);
@@ -108,14 +116,6 @@ function median(values: number[]): number {
   return sorted.length % 2 === 1
     ? sorted[middle]
     : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function atOrBefore(event: CausalMarketEvent, cutoff: CausalMarketEvent): boolean {
-  const eventMono = BigInt(event.receivedMonoNs);
-  const cutoffMono = BigInt(cutoff.receivedMonoNs);
-  if (eventMono < cutoffMono) return true;
-  if (eventMono > cutoffMono) return false;
-  return event.ingestSeq <= cutoff.ingestSeq;
 }
 
 /**
@@ -216,18 +216,71 @@ export class CausalMarketBuffer {
 
   snapshotForTarget(target: CausalMarketEvent): CausalSnapshot {
     this.assertTarget(target);
+    const cutoffMono = BigInt(target.receivedMonoNs);
+    return this.buildSnapshot(target, cutoffMono, target.ingestSeq, cutoffMono);
+  }
+
+  /**
+   * Seal the latest state known at or before a monotonic horizon cutoff.
+   *
+   * nowMonoNs must be sampled from the same process clock when the snapshot is
+   * sealed. The current ingest sequence becomes part of the boundary, so
+   * equal-clock events not yet ingested cannot be pulled backwards into this
+   * result. Later buffer arrivals never mutate the returned value snapshot.
+   */
+  snapshotAsOf(cutoffMonoNs: string, nowMonoNs: string): CausalAsOfSnapshot {
+    const cutoffMono = parseMonoNs(cutoffMonoNs, 'cutoffMonoNs');
+    const nowMono = parseMonoNs(nowMonoNs, 'nowMonoNs');
+    if (nowMono < cutoffMono) throw new Error('causal cutoff is still in the future');
+    if (this.lastReceivedMonoNs !== undefined && nowMono < this.lastReceivedMonoNs) {
+      throw new Error('nowMonoNs precedes an event already received in this clock domain');
+    }
+
+    const cutoffIngestSeq = this.ingestSeqValue;
+    const target = this.latestAtBoundary(this.target, cutoffMono, cutoffIngestSeq);
+    if (!target) throw new Error('no target state exists at or before the requested causal cutoff');
+    return Object.freeze({
+      cutoffMonoNs,
+      sealedAtMonoNs: nowMonoNs,
+      cutoffIngestSeq,
+      snapshot: this.buildSnapshot(target, cutoffMono, cutoffIngestSeq, cutoffMono),
+    });
+  }
+
+  historySize(stream: CausalMarketStream): number {
+    const normalized = normalizeStream(stream, 'stream');
+    const key = streamKey(normalized);
+    const history = this.histories.get(key);
+    if (!history) throw new Error('stream is not configured for this causal buffer');
+    return history.length;
+  }
+
+  resetSession(newSessionId: string): void {
+    const normalized = normalizeText(newSessionId, 'newSessionId');
+    if (normalized === this.sessionIdValue) throw new Error('newSessionId must identify a new clock domain');
+    this.sessionIdValue = normalized;
+    this.ingestSeqValue = 0;
+    this.lastReceivedMonoNs = undefined;
+    for (const history of this.histories.values()) history.length = 0;
+  }
+
+  private buildSnapshot(
+    target: CausalMarketEvent,
+    cutoffMono: bigint,
+    cutoffIngestSeq: number,
+    freshnessCutoffMono: bigint,
+  ): CausalSnapshot {
     const selected: CausalMarketEvent[] = [];
     const failures: CausalSnapshotFailure[] = [];
-    const targetMono = BigInt(target.receivedMonoNs);
 
     for (const referenceStream of this.references) {
-      const reference = this.latestAt(referenceStream, target);
+      const reference = this.latestAtBoundary(referenceStream, cutoffMono, cutoffIngestSeq);
       if (!reference) {
         failures.push({ code: 'MISSING_REFERENCE', stream: { ...referenceStream } });
         continue;
       }
       const referenceMono = BigInt(reference.receivedMonoNs);
-      if (targetMono - referenceMono > this.maxReferenceAgeNs) {
+      if (freshnessCutoffMono - referenceMono > this.maxReferenceAgeNs) {
         failures.push({ code: 'STALE_REFERENCE', stream: { ...referenceStream } });
         continue;
       }
@@ -272,29 +325,18 @@ export class CausalMarketBuffer {
     };
   }
 
-  historySize(stream: CausalMarketStream): number {
-    const normalized = normalizeStream(stream, 'stream');
-    const key = streamKey(normalized);
-    const history = this.histories.get(key);
-    if (!history) throw new Error('stream is not configured for this causal buffer');
-    return history.length;
-  }
-
-  resetSession(newSessionId: string): void {
-    const normalized = normalizeText(newSessionId, 'newSessionId');
-    if (normalized === this.sessionIdValue) throw new Error('newSessionId must identify a new clock domain');
-    this.sessionIdValue = normalized;
-    this.ingestSeqValue = 0;
-    this.lastReceivedMonoNs = undefined;
-    for (const history of this.histories.values()) history.length = 0;
-  }
-
-  private latestAt(stream: CausalMarketStream, cutoff: CausalMarketEvent): CausalMarketEvent | undefined {
+  private latestAtBoundary(
+    stream: CausalMarketStream,
+    cutoffMono: bigint,
+    cutoffIngestSeq: number,
+  ): CausalMarketEvent | undefined {
     const history = this.histories.get(streamKey(stream));
     if (!history) return undefined;
     for (let index = history.length - 1; index >= 0; index -= 1) {
       const event = history[index];
-      if (event.sessionId === cutoff.sessionId && atOrBefore(event, cutoff)) return event;
+      if (event.sessionId !== this.sessionIdValue) continue;
+      const eventMono = BigInt(event.receivedMonoNs);
+      if (eventMono < cutoffMono || (eventMono === cutoffMono && event.ingestSeq <= cutoffIngestSeq)) return event;
     }
     return undefined;
   }
