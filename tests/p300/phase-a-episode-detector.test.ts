@@ -58,7 +58,7 @@ test('one long dislocation cannot be fragmented into repeated independent episod
   assert.ok(episode);
 
   const atEnd = 10n + PHASE_A_MAX_EPISODE_NS;
-  const closed = detector.advanceClock(atEnd);
+  const closed = detector.advanceClock(atEnd.toString());
   assert.equal(closed[0]?.type, 'closed');
   assert.equal(detector.status, 'awaiting_rearm');
 
@@ -93,7 +93,7 @@ test('data-integrity invalidation ends the open episode and forces a new rearm',
   const detector = new PhaseAEpisodeDetector('session-a');
   detector.observe(observation(1n, 0, 1));
   detector.observe(observation(2n, -20, 2));
-  const invalidated = detector.invalidate(3n, 'reference feed stale');
+  const invalidated = detector.invalidate('3', 'reference feed stale');
   assert.equal(invalidated[0]?.type, 'invalidated');
   assert.equal(detector.status, 'awaiting_rearm');
   assert.deepEqual(detector.observe(observation(4n, -30, 3)), []);
