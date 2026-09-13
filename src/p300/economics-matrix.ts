@@ -46,7 +46,12 @@ export function evaluateEconomicsMatrixCandidate(
   const economics = evaluateEconomics(candidate.economics);
   const requiredExitSlices = candidate.requiredExitSlices ?? 1;
 
-  if (!(candidate.positionBaseQty > 0)) reasons.push('position quantity must be > 0');
+  if (!Number.isInteger(requiredExitSlices) || requiredExitSlices < 1) {
+    throw new Error('required exit slices must be a positive integer');
+  }
+  if (!(Number.isFinite(candidate.positionBaseQty) && candidate.positionBaseQty > 0)) {
+    reasons.push('position quantity must be finite and > 0');
+  }
   if (now.totalExitSlices < 1) reasons.push('position is not currently executable');
   if (now.totalExitSlices < requiredExitSlices) {
     reasons.push('insufficient current exit granularity');
