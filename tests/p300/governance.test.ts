@@ -80,6 +80,21 @@ test('risk envelope rejects internally inconsistent slots and daily loss', () =>
   assert.ok(result.reasons.some(r => r.includes('slots × max risk')));
 });
 
+test('spot risk envelope cannot declare loss limits larger than authorized capital', () => {
+  const daily = validateRiskEnvelope({
+    authorizedCapital: 25,
+    maxGrossExposure: 20,
+    maxDailyLoss: 30,
+    maxDrawdown: 30,
+    maxConcurrentSlots: 1,
+    maxRiskPerPosition: 5,
+    maxPositionNotional: 20,
+  });
+  assert.equal(daily.valid, false);
+  assert.ok(daily.reasons.some(r => r.includes('daily loss exceeds authorized capital')));
+  assert.ok(daily.reasons.some(r => r.includes('drawdown exceeds authorized capital')));
+});
+
 test('MVE exposes cost floor separately from same-horizon economic hurdle', () => {
   const result = evaluateEconomics({
     grossEdgeBps: 95,
