@@ -22,4 +22,20 @@ test('authorization hash is stable across object key ordering', () => {
   const hash = hashAuthorizationProfile(a);
   assert.equal(hashAuthorizationProfile(b), hash);
   assert.equal(verifyAuthorizationProfileHash(b, hash), true);
+  assert.equal(verifyAuthorizationProfileHash(b, 'not-a-sha256'), false);
+});
+
+test('authorization hash rejects values JSON would otherwise erase or coerce', () => {
+  assert.throws(() => hashAuthorizationProfile({ exposure: Number.NaN }), /non-finite/);
+  assert.throws(() => hashAuthorizationProfile({ exposure: Number.POSITIVE_INFINITY }), /non-finite/);
+  assert.throws(() => hashAuthorizationProfile({ optional: undefined }), /undefined/);
+  assert.throws(() => hashAuthorizationProfile([1, undefined]), /undefined/);
+  assert.throws(() => hashAuthorizationProfile({ amount: 1n }), /bigint/);
+});
+
+test('authorization hash rejects circular and non-plain objects', () => {
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  assert.throws(() => hashAuthorizationProfile(circular), /circular/);
+  assert.throws(() => hashAuthorizationProfile({ at: new Date() }), /non-plain/);
 });
