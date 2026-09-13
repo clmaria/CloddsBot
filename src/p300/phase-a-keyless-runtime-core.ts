@@ -174,7 +174,11 @@ export class PhaseAKeylessRuntimeCore {
     return this.acceptBitvavoBookUpdate(parsedBook.update, parsedBook.stamp);
   }
 
-  /** Fail closed on disconnect/parse uncertainty and request a fresh snapshot. */
+  /**
+   * Fail closed on disconnect/parse uncertainty and request a fresh snapshot.
+   * An invalidation is not a market observation and therefore deliberately does
+   * not emit a synthetic target_state with a newly stamped time.
+   */
   invalidateBitvavo(reasonInput: string, stamp: PhaseAReceiveStamp): PhaseAKeylessRuntimeCoreEvent[] {
     this.observeRuntimeStamp(stamp);
     const reason = reasonInput.trim();
@@ -190,7 +194,6 @@ export class PhaseAKeylessRuntimeCore {
         observedMonoNs: stamp.receivedMonoNs,
       },
       ...this.ensureBitvavoSnapshotRequest(),
-      ...this.targetStateEvents(stamp.receivedMonoNs, false),
     ];
   }
 
@@ -233,7 +236,6 @@ export class PhaseAKeylessRuntimeCore {
       return [
         { kind: 'bitvavo_book_invalidated', reason, observedMonoNs: stamp.receivedMonoNs },
         ...this.ensureBitvavoSnapshotRequest(),
-        ...this.targetStateEvents(stamp.receivedMonoNs, false),
       ];
     }
 
@@ -265,7 +267,6 @@ export class PhaseAKeylessRuntimeCore {
       return [
         { kind: 'bitvavo_book_invalidated', reason, observedMonoNs: stamp.receivedMonoNs },
         ...this.ensureBitvavoSnapshotRequest(),
-        ...this.targetStateEvents(stamp.receivedMonoNs, false),
       ];
     }
 
