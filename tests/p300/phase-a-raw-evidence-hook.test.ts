@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PhaseAKeylessRuntimeCore } from '../../src/p300/phase-a-keyless-runtime-core';
+import {
+  PhaseAKeylessRuntimeCore,
+  type PhaseAKeylessRuntimeCoreEvent,
+} from '../../src/p300/phase-a-keyless-runtime-core';
 import {
   PHASE_A_PUBLIC_ENDPOINTS,
   PhaseAPublicMarketTransport,
@@ -74,22 +77,25 @@ function harness(snapshotBody = '{"market":"BTC-USDC","nonce":1,"bids":[["99","1
       },
       clearTimeoutFn: () => {},
     },
-    onRawMarketData: (event) => raw.push(event),
+    onRawMarketData: (event) => { raw.push(event); },
   });
   return { core, transport, sockets, raw, timers };
 }
 
-async function flushAsync(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+async function flushAsync(rounds = 4): Promise<void> {
+  for (let i = 0; i < rounds; i += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
-test('records the exact websocket payload with the same causal stamp before runtime parsing', () => {
+test('records the exact websocket payload with the same causal stamp before runtime parsing', async () => {
   const h = harness();
   h.transport.start();
   const binance = h.sockets.get(PHASE_A_PUBLIC_ENDPOINTS.binanceWs);
   assert.ok(binance);
   const payload = JSON.stringify({ u: 7, s: 'BTCUSDC', b: '99.9', B: '1', a: '100.1', A: '1' });
   binance.emit('message', payload);
+  await flushAsync();
 
   assert.equal(h.raw.length, 1);
   assert.equal(h.raw[0].source, 'binance');
@@ -99,12 +105,13 @@ test('records the exact websocket payload with the same causal stamp before runt
   h.transport.stop();
 });
 
-test('malformed websocket payload is preserved before the session fails closed', () => {
+test('malformed websocket payload is preserved before the session fails closed', async () => {
   const h = harness();
   h.transport.start();
   const kraken = h.sockets.get(PHASE_A_PUBLIC_ENDPOINTS.krakenWs);
   assert.ok(kraken);
   kraken.emit('message', '{not-json');
+  await flushAsync();
 
   assert.equal(h.raw.length, 1);
   assert.equal(h.raw[0].source, 'kraken');
@@ -127,7 +134,7 @@ test('Bitvavo REST raw evidence is emitted only after proven live-book overlap a
   assert.equal(h.core.bitvavoSynchronized, false);
 
   bitvavo.emit('message', firstBitvavoBookUpdate());
-  await flushAsync();
+  await flushAsync(8);
 
   const rest = h.raw.find((event) => event.channel === 'book_snapshot_rest');
   assert.ok(rest);
@@ -139,9 +146,48 @@ test('Bitvavo REST raw evidence is emitted only after proven live-book overlap a
   h.transport.stop();
 });
 
-test('evidence sink failure invalidates the causal session instead of collecting an unaudited observation', () => {
+test('async evidence persistence completes before runtime parsing is allowed', async () => {
+  const sockets = new Map<string, Socket>();
+  const runtimeEvents: PhaseAKeylessRuntimeCoreEvent[] = [];
+  let release!: () => void;
+  const persisted = new Promise<void>((resolve) => { release = resolve; });
+  const core = runtime();
+  const transport = new PhaseAPublicMarketTransport({
+    runtime: core,
+    dependencies: {
+      webSocketFactory: (url) => {
+        const socket = new Socket();
+        sockets.set(url, socket);
+        return socket;
+      },
+      fetchFn: async () => ({ ok: true, status: 200, text: async () => '{}' }),
+      monotonicNowNs: () => 1n,
+      wallNowMs: () => 1,
+      makeSessionId: () => 'raw-hook-session-2',
+      setTimeoutFn: (callback) => setTimeout(callback, 1),
+      clearTimeoutFn: (timer) => clearTimeout(timer),
+    },
+    onRawMarketData: async () => persisted,
+    onRuntimeEvent: (event) => { runtimeEvents.push(event); },
+  });
+  transport.start();
+  const binance = sockets.get(PHASE_A_PUBLIC_ENDPOINTS.binanceWs);
+  assert.ok(binance);
+  binance.emit('message', JSON.stringify({ u: 1, s: 'BTCUSDC', b: '99', B: '1', a: '100', A: '1' }));
+  await flushAsync();
+  assert.equal(runtimeEvents.length, 0, 'runtime must not overtake durable evidence');
+
+  release();
+  await flushAsync();
+  assert.equal(runtimeEvents.length, 1);
+  assert.equal(runtimeEvents[0].kind, 'reference');
+  transport.stop();
+});
+
+test('async evidence sink failure invalidates the causal session before runtime mutation', async () => {
   const sockets = new Map<string, Socket>();
   const timers: Array<() => void> = [];
+  const runtimeEvents: PhaseAKeylessRuntimeCoreEvent[] = [];
   let sessionCounter = 1;
   const core = runtime();
   const transport = new PhaseAPublicMarketTransport({
@@ -162,12 +208,16 @@ test('evidence sink failure invalidates the causal session instead of collecting
       },
       clearTimeoutFn: () => {},
     },
-    onRawMarketData: () => { throw new Error('disk unavailable'); },
+    onRawMarketData: async () => { throw new Error('disk unavailable'); },
+    onRuntimeEvent: (event) => { runtimeEvents.push(event); },
   });
   transport.start();
   const binance = sockets.get(PHASE_A_PUBLIC_ENDPOINTS.binanceWs);
   assert.ok(binance);
   binance.emit('message', JSON.stringify({ u: 1, s: 'BTCUSDC', b: '99', B: '1', a: '100', A: '1' }));
+  await flushAsync();
+
+  assert.equal(runtimeEvents.length, 0);
   assert.equal(core.sessionId, 'raw-hook-session-2');
   assert.equal(timers.length, 1);
   transport.stop();
