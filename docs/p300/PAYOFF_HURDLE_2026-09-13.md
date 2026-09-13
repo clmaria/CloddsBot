@@ -2,117 +2,123 @@
 
 Status: **ECONOMIC SENSITIVITY / NOT A RETURN FORECAST**
 
-Purpose: stop P300 from confusing a statistically interesting edge with an economically worthwhile €300 experiment.
+Purpose: stop P300 from confusing a statistically interesting edge with an economically worthwhile €300 experiment, while also preventing the opposite mistake of treating all authorized capital as one trade.
 
 ## Baseline
 
 For the current Bitvavo BTC-USDC candidate, the base-tier crypto/USDC fee-only round-trip floor is approximately **10 bps** (5 bps per fill each way).
 
-All calculations below are intentionally optimistic because they subtract only that fee floor. They do **not** yet subtract:
-- spread or maker opportunity cost;
-- slippage;
-- adverse selection;
-- non-fill cost;
-- infrastructure/API cost;
-- tax/accounting/admin workload;
-- losses/variance/drawdown.
+All calculations below are intentionally optimistic because they subtract only that fee floor. They do **not** yet subtract spread/non-fill opportunity cost, slippage, adverse selection, infrastructure/API cost, tax/accounting/admin workload, losses/variance or drawdown.
 
 Therefore these figures are ceilings on simple per-round-trip economics, not expected profits.
+
+## Capital is not trade size
+
+Keep these concepts separate:
+- `authorizedCapital` = maximum capital P300 is allowed to put under strategy authority;
+- `maxPositionNotional` / Risk Envelope = maximum notional a single position may use;
+- venue minimums/granularity = what can actually be executed;
+- `deployedNotional` = actual notional of one hypothetical round trip.
+
+For every calculation below:
+
+`deployedNotional <= min(authorizedCapital, maxPositionNotional, venue/risk constraints)`
+
+The fact that €300 is eventually authorized would **not** imply €300 per trade. P300 must never enlarge a trade merely to make absolute PnL look worthwhile.
 
 ## Euro value of a claimed gross edge
 
 `optimistic_net_bps = gross_reversion_bps - 10 fee_bps`
 
-`optimistic_pnl_per_round_trip = authorized_notional × optimistic_net_bps / 10,000`
+`optimistic_pnl_per_round_trip = deployedNotional × optimistic_net_bps / 10,000`
 
-| Authorized notional | 20 bps gross | 30 bps gross | 50 bps gross | 100 bps gross |
+| Deployed notional in one round trip | 20 bps gross | 30 bps gross | 50 bps gross | 100 bps gross |
 |---:|---:|---:|---:|---:|
-| €25 | €0.025 | €0.05 | €0.10 | €0.225 |
-| €50 | €0.05 | €0.10 | €0.20 | €0.45 |
-| €100 | €0.10 | €0.20 | €0.40 | €0.90 |
-| €150 | €0.15 | €0.30 | €0.60 | €1.35 |
-| €300 | €0.30 | €0.60 | €1.20 | €2.70 |
+| €5 | €0.005 | €0.010 | €0.020 | €0.045 |
+| €10 | €0.010 | €0.020 | €0.040 | €0.090 |
+| €25 | €0.025 | €0.050 | €0.100 | €0.225 |
+| €50 | €0.050 | €0.100 | €0.200 | €0.450 |
+| €100 | €0.100 | €0.200 | €0.400 | €0.900 |
+| €300 | €0.300 | €0.600 | €1.200 | €2.700 |
 
-The corresponding optimistic net edges are 10, 20, 40 and 90 bps respectively.
+The corresponding optimistic net edges are 10, 20, 40 and 90 bps. The €300 row is a mathematical ceiling/sensitivity only, not a recommended or pre-authorized trade size.
 
-## How many round trips would be needed to create €50?
+## How many completed round trips would create €50?
 
-Again, this ignores all costs except the 10 bps fee floor.
+Again, fee floor only and only if every listed round trip were valid/realizable.
 
-| Authorized notional | 20 bps gross | 30 bps gross | 50 bps gross | 100 bps gross |
+| Deployed notional | 20 bps gross | 30 bps gross | 50 bps gross | 100 bps gross |
 |---:|---:|---:|---:|---:|
+| €5 | 10,000 | 5,000 | 2,500 | 1,112 |
+| €10 | 5,000 | 2,500 | 1,250 | 556 |
 | €25 | 2,000 | 1,000 | 500 | 223 |
 | €100 | 500 | 250 | 125 | 56 |
 | €300 | 167 | 84 | 42 | 19 |
 
-This exposes the central P300 constraint: at low authorized capital, a small-bps edge can be real and still have negligible absolute value.
+This exposes the central P300 constraint: a small-bps edge can be real and still have negligible absolute value at safe small trade sizes.
 
-## Frequency example
+## Frequency sensitivity
 
-Suppose, purely as a sensitivity case, Phase A eventually supported **50 bps gross / 40 bps after fee floor** on each independent realizable round trip.
+Suppose, only as a sensitivity case, future evidence supported **50 bps gross / 40 bps after the fee floor** on each independent realizable round trip.
 
 Approximate annual optimistic PnL without compounding:
 
-| Valid round trips/year | €25 authorized | €100 authorized | €300 authorized |
-|---:|---:|---:|---:|
-| 52 (1/week) | €5.20 | €20.80 | €62.40 |
-| 104 (2/week) | €10.40 | €41.60 | €124.80 |
-| 260 (5/week) | €26.00 | €104.00 | €312.00 |
-| 520 (10/week) | €52.00 | €208.00 | €624.00 |
+| Valid round trips/year | €5 deployed | €10 deployed | €25 deployed | €100 deployed | €300 deployed ceiling |
+|---:|---:|---:|---:|---:|---:|
+| 52 | €1.04 | €2.08 | €5.20 | €20.80 | €62.40 |
+| 104 | €2.08 | €4.16 | €10.40 | €41.60 | €124.80 |
+| 260 | €5.20 | €10.40 | €26.00 | €104.00 | €312.00 |
+| 520 | €10.40 | €20.80 | €52.00 | €208.00 | €624.00 |
 
-These are not forecasts. They show why **frequency is part of the edge economics**, not a secondary metric.
+These are not forecasts. They show why **opportunity frequency and safe deployable size are both part of the economics**.
 
-## Sensitivity to only a few extra bps of friction
+## Sensitivity to a few extra bps of friction
 
-At full €300 notional and 100 round trips/year:
+At any deployed notional, an additional 10 bps of friction removes another 0.10% of that notional per completed round trip.
 
-- 20 bps gross, fee floor only → ~€30/year.
-- Add another 10 bps of combined spread/slippage/adverse-selection cost → ~€0/year.
-- 30 bps gross, fee floor only → ~€60/year.
-- Add another 10 bps → ~€30/year.
-- 50 bps gross, fee floor only → ~€120/year.
-- Add another 10 bps → ~€90/year.
+Example at a €25 trade and 100 completed round trips/year:
+- 20 bps gross, fee floor only → ~€2.50/year;
+- add another 10 bps friction → ~€0/year;
+- 30 bps gross, fee floor only → ~€5/year;
+- add another 10 bps → ~€2.50/year;
+- 50 bps gross, fee floor only → ~€10/year;
+- add another 10 bps → ~€7.50/year.
 
 A few bps matter enormously at this scale. This is why Phase A must measure execution conditions rather than infer profitability from gross reversion.
 
 ## Fixed-cost hurdle
 
 At the €300 hard capital ceiling:
+- €5/month dedicated infrastructure = €60/year = 20% of initial capital;
+- €10/month = €120/year = 40%.
 
-- €5/month dedicated infrastructure = €60/year = **20% of the initial capital**.
-- €10/month = €120/year = **40% of the initial capital**.
+Therefore Phase A has a **zero-new-paid-infrastructure default**. Public/keyless feeds and existing compute come first.
 
-Therefore Phase A has a **zero-new-paid-infrastructure default**. Public/keyless feeds and existing compute should be used first.
-
-If a candidate edge can only be demonstrated or captured with paid low-latency/data infrastructure, that cost enters the Economics Gate before promotion. P300 must not externalize infrastructure cost simply because it is paid outside the trading account.
+If a candidate can only be demonstrated/captured using paid low-latency infrastructure, that cost enters the Economics Gate before promotion. P300 must not externalize infrastructure cost because it is paid outside the trading account.
 
 ## Economic promotion implication
 
-Phase A must not answer only:
+Phase A must not answer only “does the dislocation tend to revert?” It must establish whether there is plausible room for:
 
-> Does the dislocation tend to revert?
+**magnitude × conservative fillability × valid opportunity frequency × safe deployed notional − all execution/operational costs**
 
-It must establish whether there is plausible room for the conjunction:
+to justify the attention/complexity required.
 
-**magnitude × conservative fillability × valid opportunity frequency × usable capital − all execution/operational costs**
-
-to be worth the attention and complexity required.
-
-A small positive expected value is not automatically enough. P300 is competing for scarce attention against other projects.
+A small positive expected value is not automatically enough. P300 competes for scarce attention against other projects.
 
 ## Phase A reporting requirement
 
-Alongside convergence/fill metrics, Phase A should report:
+Alongside convergence metrics, Phase A should report:
 - valid independent underpriced episodes per observation day/week;
-- fraction with Tier A strict fill evidence;
-- fraction with Tier B visible-queue fill evidence;
-- gross convergence distribution at each frozen horizon;
+- gross convergence distribution at every frozen horizon;
 - executable net-edge sensitivity after fee floor plus 5/10/20 bps additional friction;
-- estimated annualized **absolute euro** opportunity at the currently authorized notional and at the €300 ceiling, clearly labeled as sensitivity rather than forecast;
-- attention/operational burden required to maintain the data and system.
+- absolute-euro sensitivity at €5/€10/€25 and at the **current permitted max position notional**, not merely at total authorized capital;
+- maker-fill/non-fill sensitivity only after the monotonic fill-timing gate is solved;
+- an explicit €300 deployed-notional ceiling scenario only as an upper-bound sensitivity, never as an implicit sizing recommendation;
+- attention/operational burden required to maintain the data/system.
 
 ## Kill implication
 
-The experiment should be eligible for **PAUSE/KILL even with statistically positive reversion** if plausible absolute payoff at the €300 ceiling is too small to justify its maintenance/attention burden.
+The experiment should be eligible for **PAUSE/KILL even with statistically positive reversion** if plausible absolute payoff at safely deployable trade sizes and the €300 total-capital ceiling is too small to justify maintenance/attention burden.
 
-Conversely, a strong Phase A result does not authorize using €300 immediately. Upward authorized capital remains human-gated and must progress through the existing P300 governance ladder.
+Conversely, a strong Phase A result does not authorize using €300 immediately. Upward authorized capital and max-position changes remain human-gated and must pass the existing P300 governance ladder.
