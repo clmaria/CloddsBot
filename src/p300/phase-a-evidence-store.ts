@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, type Hash } from 'node:crypto';
 import { appendFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import {
@@ -52,6 +52,16 @@ export interface PhaseAEvidenceStoreManifest {
 interface AppendState {
   bytes: number;
   records: number;
+}
+
+interface AppendIntegrityState {
+  bytes: number;
+  hash: Hash;
+}
+
+interface SealedFileState {
+  bytes: number;
+  sha256: string;
 }
 
 function sha256Hex(value: string | Buffer): string {
@@ -118,9 +128,10 @@ async function listFilesRecursively(rootDir: string, currentDir = rootDir): Prom
  *
  * A cohort directory is created exclusively and can never be reopened by this
  * class. Raw market payloads are appended as canonical NDJSON, envelopes are
- * immutable content-addressed JSON files, and finalization writes a manifest
- * that hashes every pre-existing cohort/raw/episode file. No database, queue,
- * credential or execution capability is present here.
+ * immutable content-addressed JSON files, and finalization verifies the exact
+ * bytes written by this process before hashing every evidence file into a
+ * manifest. External mutation/injection therefore fails closed instead of being
+ * silently blessed by finalization.
  */
 export class PhaseAEvidenceStore {
   readonly cohortDir: string;
@@ -129,11 +140,13 @@ export class PhaseAEvidenceStore {
   readonly configHash: string;
 
   private readonly appendState = new Map<string, AppendState>();
+  private readonly appendIntegrity = new Map<string, AppendIntegrityState>();
+  private readonly sealedFiles = new Map<string, SealedFileState>();
   private mutationTail: Promise<void> = Promise.resolve();
   private finalized = false;
 
   private constructor(
-    private readonly rootDir: string,
+    rootDir: string,
     cohortId: string,
     collectorCommitSha: string,
     configHash: string,
@@ -170,11 +183,9 @@ export class PhaseAEvidenceStore {
       configHash,
       frozenConfig: config.frozenConfig,
     };
-    await writeFile(
-      join(store.cohortDir, 'cohort.json'),
-      `${canonicalPhaseAJson(cohortRecord)}\n`,
-      { encoding: 'utf8', flag: 'wx' },
-    );
+    const encoded = `${canonicalPhaseAJson(cohortRecord)}\n`;
+    await writeFile(join(store.cohortDir, 'cohort.json'), encoded, { encoding: 'utf8', flag: 'wx' });
+    store.rememberSealedFile('cohort.json', encoded);
     return store;
   }
 
@@ -216,8 +227,10 @@ export class PhaseAEvidenceStore {
 
       const relativePath = normalizeRelativePath(join('episodes', `${envelope.contentHash}.json`));
       const absolute = this.absolutePath(relativePath);
+      const encoded = `${canonicalPhaseAJson(envelope)}\n`;
       await mkdir(dirname(absolute), { recursive: true });
-      await writeFile(absolute, `${canonicalPhaseAJson(envelope)}\n`, { encoding: 'utf8', flag: 'wx' });
+      await writeFile(absolute, encoded, { encoding: 'utf8', flag: 'wx' });
+      this.rememberSealedFile(relativePath, encoded);
       return relativePath;
     });
   }
@@ -226,8 +239,17 @@ export class PhaseAEvidenceStore {
     return this.serialized(async () => {
       this.assertMutable();
       const finalizedAt = assertUtcIso(finalizedAtUtc);
-      const files = (await listFilesRecursively(this.cohortDir))
-        .filter((path) => path !== 'manifest.json');
+      await this.verifyExpectedFilesUnchanged();
+
+      const files = (await listFilesRecursively(this.cohortDir)).filter((path) => path !== 'manifest.json');
+      const expectedFiles = new Set([...this.sealedFiles.keys(), ...this.appendIntegrity.keys()]);
+      for (const path of files) {
+        if (!expectedFiles.has(path)) throw new Error(`unexpected file appeared in Phase-A cohort before finalization: ${path}`);
+      }
+      for (const path of expectedFiles) {
+        if (!files.includes(path)) throw new Error(`expected Phase-A evidence file is missing before finalization: ${path}`);
+      }
+
       const entries: PhaseAStoreManifestEntry[] = [];
       for (const path of files) {
         const absolute = this.absolutePath(path);
@@ -270,15 +292,44 @@ export class PhaseAEvidenceStore {
       endRecord: state.records + 1,
       rawPayloadSha256,
     };
-    await this.appendText(relativePath, encoded, state.records === 0);
+    await this.appendText(relativePath, encoded);
     this.appendState.set(relativePath, { bytes: range.endByte, records: range.endRecord });
     return range;
   }
 
-  private async appendText(relativePath: string, content: string, firstWrite = false): Promise<void> {
+  private async appendText(relativePath: string, content: string): Promise<void> {
     const absolute = this.absolutePath(relativePath);
+    const current = this.appendIntegrity.get(relativePath);
     await mkdir(dirname(absolute), { recursive: true });
-    await appendFile(absolute, content, { encoding: 'utf8', flag: firstWrite ? 'ax' : 'a' });
+    await appendFile(absolute, content, { encoding: 'utf8', flag: current ? 'a' : 'ax' });
+
+    const nextHash = current?.hash ?? createHash('sha256');
+    nextHash.update(content, 'utf8');
+    this.appendIntegrity.set(relativePath, {
+      bytes: (current?.bytes ?? 0) + Buffer.byteLength(content, 'utf8'),
+      hash: nextHash,
+    });
+  }
+
+  private rememberSealedFile(relativePath: string, content: string): void {
+    const bytes = Buffer.byteLength(content, 'utf8');
+    this.sealedFiles.set(relativePath, { bytes, sha256: sha256Hex(content) });
+  }
+
+  private async verifyExpectedFilesUnchanged(): Promise<void> {
+    for (const [path, expected] of this.sealedFiles) {
+      const bytes = await readFile(this.absolutePath(path));
+      if (bytes.byteLength !== expected.bytes || sha256Hex(bytes) !== expected.sha256) {
+        throw new Error(`sealed Phase-A evidence file changed before finalization: ${path}`);
+      }
+    }
+    for (const [path, expected] of this.appendIntegrity) {
+      const bytes = await readFile(this.absolutePath(path));
+      const expectedHash = expected.hash.copy().digest('hex');
+      if (bytes.byteLength !== expected.bytes || sha256Hex(bytes) !== expectedHash) {
+        throw new Error(`append-only Phase-A evidence file changed before finalization: ${path}`);
+      }
+    }
   }
 
   private absolutePath(relativePath: string): string {
