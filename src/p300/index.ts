@@ -18,3 +18,4 @@ export * from './phase-a-collector-core';
 export * from './phase-a-episode-detector';
 export * from './phase-a-evidence-integrity';
 export * from './phase-a-horizon-recorder';
+export * from './phase-a-keyless-runtime-core';
