@@ -70,6 +70,53 @@ test('Bitvavo ticker parser ignores confirmations/non-ticker messages and fails 
   assert.throws(() => parseBitvavoTickerRaw('{bad', stamp(5n)), /invalid JSON/);
 });
 
+test('alignment state explicitly distinguishes missing, mismatched and aligned target inputs', () => {
+  const coordinator = new PhaseATargetCoordinator();
+  assert.deepEqual(coordinator.currentAlignment(), {
+    status: 'missing',
+    missing: ['book', 'ticker'],
+  });
+
+  const ticker = parseBitvavoTickerRaw(tickerRaw(), stamp(100n, 1_000));
+  assert.ok(ticker);
+  coordinator.updateTicker(ticker);
+  assert.deepEqual(coordinator.currentAlignment(), {
+    status: 'missing',
+    missing: ['book'],
+    observedThroughMonoNs: '100',
+  });
+
+  coordinator.updateBookState(book(10, 100, 1.4, 101, 2), stamp(150n, 1_050));
+  assert.deepEqual(coordinator.currentAlignment(), {
+    status: 'mismatched',
+    bookReceivedMonoNs: '150',
+    tickerReceivedMonoNs: '100',
+    observedThroughMonoNs: '150',
+  });
+
+  coordinator.updateBookState(book(11), stamp(200n, 1_100));
+  const aligned = coordinator.currentAlignment();
+  assert.equal(aligned.status, 'aligned');
+  if (aligned.status === 'aligned') {
+    assert.equal(aligned.observedThroughMonoNs, '200');
+    assert.equal(aligned.actionable.actionableReceivedMonoNs, '200');
+    assert.equal(aligned.actionable.bookNonce, 11);
+  }
+
+  coordinator.invalidateBook();
+  assert.deepEqual(coordinator.currentAlignment(), {
+    status: 'missing',
+    missing: ['book'],
+    observedThroughMonoNs: '200',
+  });
+
+  coordinator.resetForNewClockDomain();
+  assert.deepEqual(coordinator.currentAlignment(), {
+    status: 'missing',
+    missing: ['book', 'ticker'],
+  });
+});
+
 test('ticker first is not backdated: coordinator waits for matching synchronized book and uses the later book receipt', () => {
   const coordinator = new PhaseATargetCoordinator();
   const ticker = parseBitvavoTickerRaw(tickerRaw(), stamp(100n, 1_000));
@@ -104,7 +151,7 @@ test('book first uses the later ticker receipt once the ticker confirms the same
   assert.equal(actionable.target.ask, 101);
 });
 
-test('one ticker event can produce at most one actionable target even if later book updates leave the same BBO', () => {
+test('one ticker event can produce at most one emitted target while current alignment still reports later matching book state', () => {
   const coordinator = new PhaseATargetCoordinator();
   coordinator.updateBookState(book(30), stamp(100n));
   const ticker = parseBitvavoTickerRaw(tickerRaw(), stamp(200n));
@@ -112,6 +159,15 @@ test('one ticker event can produce at most one actionable target even if later b
   assert.ok(coordinator.updateTicker(ticker));
 
   assert.equal(coordinator.updateBookState(book(31), stamp(300n)), null);
+  const alignment = coordinator.currentAlignment();
+  assert.equal(alignment.status, 'aligned');
+  if (alignment.status === 'aligned') {
+    assert.equal(alignment.observedThroughMonoNs, '300');
+    assert.equal(alignment.actionable.actionableReceivedMonoNs, '300');
+    assert.equal(alignment.actionable.bookReceivedMonoNs, '300');
+    assert.equal(alignment.actionable.tickerReceivedMonoNs, '200');
+    assert.equal(alignment.actionable.bookNonce, 31);
+  }
   assert.equal(coordinator.updateBookState(book(32), stamp(400n)), null);
 });
 
