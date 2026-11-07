@@ -3,12 +3,16 @@
 # Clodds Installation Script
 # Usage: curl -fsSL https://clodds.com/install.sh | bash
 #
+# Claude Code agent installation:
+#   ./scripts/install.sh --tool claude-code
+#
 
 set -e
 
 CLODDS_VERSION="${CLODDS_VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.clodds}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+TOOL=""
 
 # Colors
 RED='\033[0;31m'
@@ -141,8 +145,76 @@ print_success() {
   echo ""
 }
 
+# Install Claude Code agents to ~/.claude/agents/
+install_claude_code_agents() {
+  local AGENTS_DIR="$HOME/.claude/agents"
+  local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
+  info "Installing Clodds agents for Claude Code..."
+
+  mkdir -p "$AGENTS_DIR"
+
+  local count=0
+  for category_dir in "$REPO_DIR"/engineering "$REPO_DIR"/trading; do
+    if [ -d "$category_dir" ]; then
+      local category
+      category="$(basename "$category_dir")"
+      for agent_file in "$category_dir"/*.md; do
+        [ -f "$agent_file" ] || continue
+        cp "$agent_file" "$AGENTS_DIR/"
+        count=$((count + 1))
+        success "Installed $(basename "$agent_file") (${category})"
+      done
+    fi
+  done
+
+  if [ "$count" -eq 0 ]; then
+    warn "No agent files found. Run this script from the CloddsBot repo root."
+    return 1
+  fi
+
+  echo ""
+  echo -e "${GREEN}========================================${NC}"
+  echo -e "${GREEN}  ${count} agents installed for Claude Code! 🤖${NC}"
+  echo -e "${GREEN}========================================${NC}"
+  echo ""
+  echo "Agents installed to: $AGENTS_DIR"
+  echo ""
+  echo "Activate in any Claude Code session:"
+  echo "  \"Hey Claude, activate Skill Builder mode and help me add a skill\""
+  echo "  \"Hey Claude, activate Strategy Developer mode and write an arbitrage strategy\""
+  echo ""
+}
+
+# Parse arguments
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tool)
+        TOOL="$2"
+        shift 2
+        ;;
+      --tool=*)
+        TOOL="${1#--tool=}"
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+}
+
 # Main
 main() {
+  parse_args "$@"
+
+  if [ "$TOOL" = "claude-code" ]; then
+    install_claude_code_agents
+    return
+  fi
+
   echo ""
   echo -e "${BLUE}Clodds Installer${NC}"
   echo "================"
